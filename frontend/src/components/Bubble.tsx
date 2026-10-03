@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { getMedia, type Message } from "@/lib/api";
-import { retry, reactMessage, forwardMsg } from "@/lib/actions";
+import { retry, reactMessage, forwardMsg, deleteMsg } from "@/lib/actions";
 import { useStore } from "@/lib/store";
 import { avatarColor, formatTime } from "@/lib/util";
 import { REACTION_EMOJIS } from "./EmojiPicker";
@@ -84,6 +84,31 @@ function ContextMenu({ msg, accountId, onClose }: { msg: Message; accountId: num
   const chats = useStore((s) => (s.activeAccountId ? s.chats[s.activeAccountId] : []));
   const [showForward, setShowForward] = useState(false);
   const [showReactions, setShowReactions] = useState(false);
+  const [showDelete, setShowDelete] = useState(false);
+  const sent = msg.status !== "pending" && msg.status !== "failed";
+
+  if (showDelete) {
+    return (
+      <div className="absolute z-50 bg-white rounded-lg shadow-lg border border-border py-1 w-44" style={{ bottom: "100%", right: 0 }}>
+        <div className="text-xs font-medium text-muted px-3 py-1">Delete message?</div>
+        {msg.from_me && sent && (
+          <button
+            onClick={() => { deleteMsg(msg, "everyone"); onClose(); }}
+            className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50 text-danger"
+          >
+            Delete for everyone
+          </button>
+        )}
+        <button
+          onClick={() => { deleteMsg(msg, "me"); onClose(); }}
+          className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50"
+        >
+          Delete for me
+        </button>
+        <p className="px-3 pb-1 text-[11px] text-muted">&quot;For me&quot; hides it here only; it stays on your phone.</p>
+      </div>
+    );
+  }
 
   if (showForward) {
     return (
@@ -135,7 +160,7 @@ function ContextMenu({ msg, accountId, onClose }: { msg: Message; accountId: num
             <button
               key={e}
               onClick={() => {
-                reactMessage(accountId, msg.id, msg.wa_message_id, e);
+                reactMessage(msg, e);
                 onClose();
               }}
               className="text-lg hover:scale-125 transition-transform"
@@ -162,6 +187,9 @@ function ContextMenu({ msg, accountId, onClose }: { msg: Message; accountId: num
       >
         Copy
       </button>
+      <button onClick={() => setShowDelete(true)} className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50 text-danger">
+        Delete
+      </button>
     </div>
   );
 }
@@ -169,6 +197,17 @@ function ContextMenu({ msg, accountId, onClose }: { msg: Message; accountId: num
 export default function Bubble({ msg, isGroup, showName, accountId }: { msg: Message; isGroup: boolean; showName: boolean; accountId: number }) {
   const mine = msg.from_me;
   const [showMenu, setShowMenu] = useState(false);
+
+  if (msg.deleted) {
+    return (
+      <div className={`flex ${mine ? "justify-end" : "justify-start"} px-3`}>
+        <div className={`rounded-lg px-2.5 py-1.5 shadow-sm text-sm italic text-muted ${mine ? "bg-bubble-mine" : "bg-bubble-theirs"}`}>
+          🚫 {mine ? "You deleted this message" : "This message was deleted"}
+          <span className="ml-2 text-[11px] not-italic">{formatTime(msg.timestamp)}</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={`flex ${mine ? "justify-end" : "justify-start"} px-3 group relative`}>
@@ -206,6 +245,22 @@ export default function Bubble({ msg, isGroup, showName, accountId }: { msg: Mes
           <span>{formatTime(msg.timestamp)}</span>
           {mine && <Ticks status={msg.status} />}
         </div>
+
+        {!!msg.reactions?.length && (
+          <div className={`flex flex-wrap gap-1 mt-1 ${mine ? "justify-end" : ""}`}>
+            {msg.reactions.map((r) => (
+              <button
+                key={r.emoji}
+                onClick={() => reactMessage(msg, r.emoji)}
+                title={r.mine ? "Click to remove your reaction" : "React with this"}
+                className={`text-xs px-1.5 py-0.5 rounded-full border ${r.mine ? "bg-primary/10 border-primary/40" : "bg-white border-border"}`}
+              >
+                {r.emoji}
+                {r.count > 1 ? ` ${r.count}` : ""}
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* Context menu trigger */}
         {msg.id > 0 && !msg.wa_message_id.startsWith("pending-") && (

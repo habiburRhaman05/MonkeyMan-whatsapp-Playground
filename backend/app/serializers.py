@@ -1,5 +1,6 @@
 """Dict serializers shared by REST responses and WebSocket events."""
 
+import json
 from datetime import datetime, timezone
 
 from sqlalchemy import func
@@ -46,6 +47,24 @@ def chat_out(c: Chat) -> dict:
     }
 
 
+def load_reactions(m: Message) -> dict[str, str]:
+    try:
+        d = json.loads(m.reactions) if m.reactions else {}
+    except ValueError:
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
+def reactions_out(m: Message) -> list[dict]:
+    counts: dict[str, int] = {}
+    mine = None
+    for sender, emoji in load_reactions(m).items():
+        counts[emoji] = counts.get(emoji, 0) + 1
+        if sender == "me":
+            mine = emoji
+    return [{"emoji": e, "count": n, "mine": e == mine} for e, n in counts.items()]
+
+
 def message_out(m: Message) -> dict:
     d: dict = {
         "id": m.id,
@@ -59,6 +78,8 @@ def message_out(m: Message) -> dict:
         "text": m.text,
         "status": m.status,
         "timestamp": iso(m.timestamp),
+        "deleted": bool(m.deleted),
+        "reactions": reactions_out(m),
     }
     if m.quoted_message_id:
         d["quoted"] = {

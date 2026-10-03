@@ -167,12 +167,22 @@ async def send_media(instance_name: str, to: str, media_type: str, media_b64: st
     return await _request("POST", f"/message/sendMedia/{instance_name}", json=body)
 
 
-async def send_reaction(instance_name: str, to: str, message_id: str, emoji: str) -> dict[str, Any]:
-    """POST /message/sendReaction/{instance} -> send emoji reaction to a message."""
-    return await _request(
-        "POST", f"/message/sendReaction/{instance_name}",
-        json={"key": {"remoteJid": to, "id": message_id}, "reaction": emoji},
-    )
+async def send_reaction(instance_name: str, to: str, message_id: str, emoji: str,
+                        from_me: bool, participant: str | None = None) -> dict[str, Any]:
+    """POST /message/sendReaction/{instance}. `fromMe` is required in the key; emoji '' removes the reaction."""
+    key: dict[str, Any] = {"remoteJid": to, "fromMe": from_me, "id": message_id}
+    if participant:
+        key["participant"] = participant
+    return await _request("POST", f"/message/sendReaction/{instance_name}", json={"key": key, "reaction": emoji})
+
+
+async def delete_message_for_everyone(instance_name: str, to: str, message_id: str,
+                                      from_me: bool = True, participant: str | None = None) -> dict[str, Any]:
+    """DELETE /chat/deleteMessageForEveryone/{instance} {id, remoteJid, fromMe, participant?}"""
+    body: dict[str, Any] = {"id": message_id, "remoteJid": to, "fromMe": from_me}
+    if participant:
+        body["participant"] = participant
+    return await _request("DELETE", f"/chat/deleteMessageForEveryone/{instance_name}", json=body)
 
 
 async def send_presence(instance_name: str, to: str, composing: bool = True) -> dict[str, Any]:

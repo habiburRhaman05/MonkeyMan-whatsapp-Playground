@@ -18,9 +18,9 @@ from app import evolution
 from app.config import settings
 from app.db import SessionLocal
 from app.models import Account, Message
-from app.normalize import better_status, map_status, parse_message
+from app.normalize import better_status, map_status, parse_message, parse_reaction, parse_revoke
 from app.serializers import chat_out, message_out, unread_total
-from app.services import store_message
+from app.services import apply_reaction, apply_revoke, store_message
 from app.sync import sync_account
 from app.ws import manager
 
@@ -77,6 +77,8 @@ async def evolution_webhook(request: Request, secret: str = Query(...)):
             await _handle_messages_upsert(instance_name, body)
         elif event == "MESSAGES_UPDATE":
             await _handle_messages_update(instance_name, body)
+        elif event == "MESSAGES_DELETE":
+            await _handle_messages_delete(instance_name, body)
         elif event == "PRESENCE_UPDATE":
             await _handle_presence_update(instance_name, body)
     except Exception:
@@ -150,6 +152,18 @@ async def _handle_messages_upsert(instance_name: str, body: dict) -> None:
         if not acc:
             return
         for item in _items(body.get("data")):
+            reaction = parse_reaction(item)
+            if reaction:
+                _save_sample("MESSAGES_UPSERT_REACTION", item)
+                msg = apply_reaction(db, acc.id, reaction)
+                if msg:
+                    await manager.broadcast("message.updated", {"account_id": acc.id, "data": {"message": message_out(msg)}})
+                continue
+            revoked = parse_revoke(item)
+            if revoked:
+                _save_sample("MESSAGES_UPSERT_REVOKE", item)
+                await _announce_revoked(db, acc.id, revoked)
+                continue
             p = parse_message(item)
             if not p:
                 continue
@@ -172,6 +186,33 @@ async def _handle_messages_upsert(instance_name: str, body: dict) -> None:
             await manager.broadcast(
                 "chat.updated", {"account_id": acc.id, "data": {"chat": chat_out(chat), "unread_total": total}}
             )
+    finally:
+        db.close()
+
+
+async def _announce_revoked(db, account_id: int, wa_id: str) -> None:
+    result = apply_revoke(db, account_id, wa_id)
+    if result:
+        msg, chat = result
+        await manager.broadcast(
+            "message.updated",
+            {"account_id": account_id, "data": {"message": message_out(msg), "chat": chat_out(chat)}},
+        )
+
+
+async def _handle_messages_delete(instance_name: str, body: dict) -> None:
+    """Evolution's payload shape for this event varies; accept {keys:[...]}, {key:{...}} or {id,...}."""
+    db = SessionLocal()
+    try:
+        acc = db.query(Account).filter_by(instance_name=instance_name).first()
+        if not acc:
+            return
+        for item in _items(body.get("data")):
+            keys = item.get("keys") if isinstance(item.get("keys"), list) else [item.get("key") or item]
+            for k in keys:
+                wa_id = (k.get("id") or k.get("keyId")) if isinstance(k, dict) else None
+                if wa_id:
+                    await _announce_revoked(db, acc.id, str(wa_id))
     finally:
         db.close()
 

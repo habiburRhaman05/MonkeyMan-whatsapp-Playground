@@ -5,9 +5,18 @@ import logging
 from app import evolution
 from app.db import SessionLocal
 from app.models import Account, Chat, Contact
-from app.normalize import STATUS_RANK, map_status, parse_message, parse_ts, phone_from_jid, skip_jid
+from app.normalize import (
+    STATUS_RANK,
+    map_status,
+    parse_message,
+    parse_reaction,
+    parse_revoke,
+    parse_ts,
+    phone_from_jid,
+    skip_jid,
+)
 from app.serializers import unread_total
-from app.services import get_or_create_chat, store_message, touch_chat
+from app.services import apply_reaction, apply_revoke, get_or_create_chat, store_message, touch_chat
 from app.ws import manager
 
 logger = logging.getLogger(__name__)
@@ -78,6 +87,7 @@ async def sync_account(account_id: int, chat_limit: int = 30, msg_limit: int = 3
             except evolution.EvolutionError as exc:
                 logger.warning("findMessages failed for chat %s: %s", chat.id, exc.status_code)
                 continue
+            later: list[dict] = []
             for rec in records:
                 if not isinstance(rec, dict):
                     continue
@@ -87,6 +97,18 @@ async def sync_account(account_id: int, chat_limit: int = 30, msg_limit: int = 3
                 p = parse_message(rec)
                 if p:
                     store_message(db, account_id, p, bump_unread=False)
+                else:
+                    later.append(rec)
+            # Reactions/deletes refer to stored messages; apply oldest first so the newest reaction wins.
+            later.sort(key=lambda r: parse_ts(r.get("messageTimestamp")))
+            for rec in later:
+                reaction = parse_reaction(rec)
+                if reaction:
+                    apply_reaction(db, account_id, reaction)
+                    continue
+                revoked = parse_revoke(rec)
+                if revoked:
+                    apply_revoke(db, account_id, revoked)
 
         # 3. Contacts
         contacts = await evolution.find_contacts(name)

@@ -50,6 +50,7 @@ class ParsedMessage:
     quoted_type: str | None = None
     media_mimetype: str | None = None
     media_filename: str | None = None
+    sender_jid: str | None = None
 
 
 def preview_for(msg_type: str, text: str | None) -> str:
@@ -229,4 +230,52 @@ def parse_message(data: dict[str, Any]) -> ParsedMessage | None:
         quoted_type=qtype,
         media_mimetype=mimetype,
         media_filename=filename,
+        sender_jid=None if from_me else (key.get("participant") or key.get("participantAlt")),
     )
+
+
+def _unwrap(message: Any) -> dict:
+    m = message if isinstance(message, dict) else {}
+    for _ in range(3):
+        for w in _WRAPPERS:
+            inner = m.get(w)
+            if isinstance(inner, dict) and isinstance(inner.get("message"), dict):
+                m = inner["message"]
+                break
+        else:
+            break
+    return m
+
+
+def _chat_jid(key: dict) -> str | None:
+    jid = key.get("remoteJid")
+    if isinstance(jid, str) and jid.endswith("@lid") and key.get("remoteJidAlt"):
+        jid = key["remoteJidAlt"]
+    return jid if isinstance(jid, str) else None
+
+
+def parse_reaction(data: dict[str, Any]) -> dict | None:
+    """A reaction event: {jid, target (wa id of the reacted message), emoji ('' = removed), sender}."""
+    if not isinstance(data, dict):
+        return None
+    r = _unwrap(data.get("message")).get("reactionMessage")
+    if not isinstance(r, dict):
+        return None
+    key = data.get("key") or {}
+    jid = _chat_jid(key)
+    target = (r.get("key") or {}).get("id")
+    if not target or skip_jid(jid):
+        return None
+    sender = "me" if key.get("fromMe") else (key.get("participant") or key.get("participantAlt") or jid)
+    return {"jid": jid, "target": str(target), "emoji": r.get("text") or "", "sender": sender}
+
+
+def parse_revoke(data: dict[str, Any]) -> str | None:
+    """wa id of the message that was deleted for everyone, if this event is a revoke."""
+    if not isinstance(data, dict):
+        return None
+    p = _unwrap(data.get("message")).get("protocolMessage")
+    if not isinstance(p, dict) or str(p.get("type", "")).upper() not in ("REVOKE", "0"):
+        return None
+    target = (p.get("key") or {}).get("id")
+    return str(target) if target else None

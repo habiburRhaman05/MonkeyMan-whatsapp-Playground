@@ -48,6 +48,7 @@ interface State {
   prependMessages: (chatId: number, msgs: Message[], hasMore: boolean) => void;
   upsertMessage: (msg: Message) => void;
   patchMessageStatus: (chatId: number, messageId: number, status: MsgStatus) => void;
+  removeMessage: (chatId: number, messageId: number) => void;
   setQr: (accountId: number, qr: string) => void;
   pushToast: (t: Omit<Toast, "id">) => void;
   dismissToast: (id: number) => void;
@@ -135,6 +136,13 @@ export const useStore = create<State>((set) => ({
       const cur = s.messages[chatId];
       if (!cur) return s;
       return { messages: { ...s.messages, [chatId]: cur.map((m) => (m.id === messageId ? { ...m, status } : m)) } };
+    }),
+
+  removeMessage: (chatId, messageId) =>
+    set((s) => {
+      const cur = s.messages[chatId];
+      if (!cur) return s;
+      return { messages: { ...s.messages, [chatId]: cur.filter((m) => m.id !== messageId) } };
     }),
 
   setQr: (accountId, qr) => set((s) => ({ qr: { ...s.qr, [accountId]: qr } })),

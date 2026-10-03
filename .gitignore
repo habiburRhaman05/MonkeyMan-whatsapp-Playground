@@ -11,3 +11,6 @@ Thumbs.db
 *.egg-info/
 dist/
 build/
+
+# real webhook samples captured at runtime (may contain phone numbers)
+docs/payloads/

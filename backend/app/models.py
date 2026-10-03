@@ -78,8 +78,13 @@ class Message(Base):
     quoted_sender: Mapped[str | None] = mapped_column(String(200), nullable=True)
     quoted_text: Mapped[str | None] = mapped_column(String(500), nullable=True)
     quoted_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    # reaction (emoji)
-    reaction: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # sender (group participant jid) of an incoming message; needed to react to / quote it in groups
+    sender_jid: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # JSON {sender: emoji}; "me" is this account
+    reactions: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # deleted for everyone (tombstone) / hidden in this dashboard only
+    deleted: Mapped[bool | None] = mapped_column(Boolean, default=False, nullable=True)
+    hidden: Mapped[bool | None] = mapped_column(Boolean, default=False, nullable=True)
     # media metadata for sending
     media_mimetype: Mapped[str | None] = mapped_column(String(100), nullable=True)
     media_filename: Mapped[str | None] = mapped_column(String(300), nullable=True)

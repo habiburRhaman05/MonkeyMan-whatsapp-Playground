@@ -70,6 +70,12 @@ export interface QuotedInfo {
   type: string | null;
 }
 
+export interface Reaction {
+  emoji: string;
+  count: number;
+  mine: boolean;
+}
+
 export interface Message {
   id: number;
   account_id: number;
@@ -83,6 +89,8 @@ export interface Message {
   status: MsgStatus;
   timestamp: string;
   quoted?: QuotedInfo;
+  deleted?: boolean;
+  reactions?: Reaction[];
   media_mimetype?: string;
   media_filename?: string;
 }
@@ -168,8 +176,12 @@ export const sendMedia = (
     client_id: clientId,
   });
 
-export const reactToMessage = (accountId: number, messageId: number, waMessageId: string, emoji: string) =>
-  post(`/accounts/${accountId}/messages/${messageId}/react`, { message_id: waMessageId, emoji });
+/** emoji "" removes your reaction */
+export const reactToMessage = (accountId: number, messageId: number, emoji: string) =>
+  post<{ message: Message }>(`/accounts/${accountId}/messages/${messageId}/react`, { emoji });
+
+export const deleteMessage = (accountId: number, messageId: number, scope: "me" | "everyone") =>
+  post<{ ok?: boolean; message?: Message }>(`/accounts/${accountId}/messages/${messageId}/delete`, { scope });
 
 export const forwardMessage = (accountId: number, messageId: number, target: { to_chat_id?: number; to?: string }) =>
   post<{ message: Message; chat: Chat }>(`/accounts/${accountId}/messages/${messageId}/forward`, target);

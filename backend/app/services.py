@@ -1,10 +1,53 @@
 """Shared persistence helpers for webhook, sync and send paths."""
 
+import json
+
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models import Chat, Message
 from app.normalize import ParsedMessage, preview_for
+from app.serializers import load_reactions
+
+DELETED_PREVIEW = "🚫 This message was deleted"
+
+
+def set_reaction(msg: Message, sender: str, emoji: str) -> None:
+    d = load_reactions(msg)
+    if emoji:
+        d[sender] = emoji
+    else:
+        d.pop(sender, None)
+    msg.reactions = json.dumps(d) if d else None
+
+
+def _find(db: Session, account_id: int, wa_id: str) -> Message | None:
+    return db.query(Message).filter_by(account_id=account_id, wa_message_id=wa_id).first()
+
+
+def apply_reaction(db: Session, account_id: int, r: dict) -> Message | None:
+    msg = _find(db, account_id, r["target"])
+    if not msg:
+        return None
+    set_reaction(msg, r["sender"], r["emoji"])
+    db.commit()
+    return msg
+
+
+def apply_revoke(db: Session, account_id: int, wa_id: str) -> tuple[Message, Chat] | None:
+    """Turn a message into a 'deleted' tombstone. Returns None if unknown or already deleted."""
+    msg = _find(db, account_id, wa_id)
+    if not msg or msg.deleted:
+        return None
+    msg.deleted = True
+    msg.text = None
+    msg.reactions = None
+    chat = db.get(Chat, msg.chat_id)
+    newest = db.query(Message).filter(Message.chat_id == chat.id).order_by(Message.timestamp.desc(), Message.id.desc()).first()
+    if newest and newest.id == msg.id:
+        chat.last_message_preview = DELETED_PREVIEW
+    db.commit()
+    return msg, chat
 
 
 def get_or_create_chat(db: Session, account_id: int, jid: str, name: str | None = None) -> Chat:
@@ -48,6 +91,7 @@ def store_message(db: Session, account_id: int, p: ParsedMessage, bump_unread: b
         quoted_type=p.quoted_type,
         media_mimetype=p.media_mimetype,
         media_filename=p.media_filename,
+        sender_jid=p.sender_jid,
     )
     db.add(msg)
     touch_chat(chat, p.timestamp, p.type, p.text)

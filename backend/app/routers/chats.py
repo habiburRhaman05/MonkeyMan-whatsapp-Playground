@@ -8,7 +8,7 @@ import uuid
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
@@ -17,7 +17,7 @@ from app.db import SessionLocal, get_db
 from app.models import Account, Chat, Contact, Message, utcnow
 from app.normalize import skip_jid
 from app.serializers import chat_out, contact_out, message_out, unread_total
-from app.services import get_or_create_chat, touch_chat
+from app.services import apply_revoke, get_or_create_chat, set_reaction, touch_chat
 from app.sync import sync_account
 from app.ws import manager
 
@@ -116,7 +116,7 @@ def list_messages(
 ):
     acc = _account(db, account_id)
     chat = _chat(db, acc, chat_id)
-    q = db.query(Message).filter(Message.chat_id == chat.id)
+    q = db.query(Message).filter(Message.chat_id == chat.id, Message.hidden.is_not(True))
     if before:
         ref = db.get(Message, before)
         if ref and ref.chat_id == chat.id:
@@ -210,8 +210,11 @@ class SendMedia(BaseModel):
 
 
 class SendReaction(BaseModel):
-    message_id: str
-    emoji: str
+    emoji: str = Field("", max_length=16)  # empty string removes your reaction
+
+
+class DeleteBody(BaseModel):
+    scope: str = "me"  # "me" (hide in this dashboard) | "everyone"
 
 
 class ForwardMessage(BaseModel):
@@ -472,14 +475,67 @@ async def react_to_message(account_id: int, message_id: int, body: SendReaction,
         raise HTTPException(404, "Message not found")
     if acc.status != "connected":
         raise HTTPException(409, "Account is not connected")
+    if msg.deleted:
+        raise HTTPException(400, "This message was deleted")
+    if msg.wa_message_id.startswith("pending-"):
+        raise HTTPException(400, "Message is still sending")
     chat = db.get(Chat, msg.chat_id)
+    participant = msg.sender_jid if (chat.is_group and not msg.from_me) else None
     try:
-        await evolution.send_reaction(acc.instance_name, chat.jid, msg.wa_message_id, body.emoji)
+        await evolution.send_reaction(
+            acc.instance_name, chat.jid, msg.wa_message_id, body.emoji, from_me=msg.from_me, participant=participant
+        )
     except evolution.EvolutionError as exc:
-        raise HTTPException(502, f"Reaction failed: {exc.detail[:200]}")
+        raise HTTPException(502, f"Reaction failed (HTTP {exc.status_code}): {exc.detail[:200]}")
     except httpx.HTTPError:
         raise HTTPException(502, "Cannot reach Evolution API")
-    return {"ok": True}
+    set_reaction(msg, "me", body.emoji)
+    db.commit()
+    out = message_out(msg)
+    await manager.broadcast("message.updated", {"account_id": acc.id, "data": {"message": out}})
+    return {"message": out}
+
+
+# ── delete ────────────────────────────────────────────────
+
+@router.post("/messages/{message_id}/delete")
+async def delete_message(account_id: int, message_id: int, body: DeleteBody, db: Session = Depends(get_db)):
+    acc = _account(db, account_id)
+    msg = db.get(Message, message_id)
+    if not msg or msg.account_id != acc.id:
+        raise HTTPException(404, "Message not found")
+
+    if body.scope == "me":
+        msg.hidden = True
+        db.commit()
+        await manager.broadcast(
+            "message.hidden", {"account_id": acc.id, "data": {"chat_id": msg.chat_id, "message_id": msg.id}}
+        )
+        return {"ok": True}
+
+    if body.scope != "everyone":
+        raise HTTPException(400, "scope must be 'me' or 'everyone'")
+    if not msg.from_me:
+        raise HTTPException(400, "You can only delete your own messages for everyone")
+    if msg.wa_message_id.startswith("pending-") or msg.status in ("pending", "failed"):
+        raise HTTPException(400, "This message was not sent; delete it for yourself instead")
+    if acc.status != "connected":
+        raise HTTPException(409, "Account is not connected")
+    if msg.deleted:
+        return {"message": message_out(msg)}
+    chat = db.get(Chat, msg.chat_id)
+    try:
+        await evolution.delete_message_for_everyone(acc.instance_name, chat.jid, msg.wa_message_id, from_me=True)
+    except evolution.EvolutionError as exc:
+        raise HTTPException(502, f"Delete failed (HTTP {exc.status_code}): {exc.detail[:200]}")
+    except httpx.HTTPError:
+        raise HTTPException(502, "Cannot reach Evolution API")
+    result = apply_revoke(db, acc.id, msg.wa_message_id)
+    if result:
+        msg, chat = result
+    out = message_out(msg)
+    await manager.broadcast("message.updated", {"account_id": acc.id, "data": {"message": out, "chat": chat_out(chat)}})
+    return {"message": out}
 
 
 # ── forward ───────────────────────────────────────────────
@@ -515,7 +571,7 @@ def search_messages(
     chat = _chat(db, acc, chat_id)
     rows = (
         db.query(Message)
-        .filter(Message.chat_id == chat.id, Message.text.ilike(f"%{q}%"))
+        .filter(Message.chat_id == chat.id, Message.hidden.is_not(True), Message.text.ilike(f"%{q}%"))
         .order_by(Message.timestamp.desc())
         .limit(limit)
         .all()

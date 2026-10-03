@@ -199,11 +199,24 @@ function fileToBase64(file: File): Promise<string> {
   });
 }
 
-export async function reactMessage(accountId: number, messageId: number, waMessageId: string, emoji: string) {
+/** Pass the same emoji you already reacted with to remove it (like WhatsApp). */
+export async function reactMessage(msg: api.Message, emoji: string) {
+  const mine = msg.reactions?.find((r) => r.mine)?.emoji;
   try {
-    await api.reactToMessage(accountId, messageId, waMessageId, emoji);
+    const r = await api.reactToMessage(msg.account_id, msg.id, mine === emoji ? "" : emoji);
+    st().upsertMessage(r.message);
   } catch (e) {
     st().pushToast({ kind: "error", title: "Reaction failed", body: errText(e) });
+  }
+}
+
+export async function deleteMsg(msg: api.Message, scope: "me" | "everyone") {
+  try {
+    const r = await api.deleteMessage(msg.account_id, msg.id, scope);
+    if (scope === "me") st().removeMessage(msg.chat_id, msg.id);
+    else if (r.message) st().upsertMessage(r.message);
+  } catch (e) {
+    st().pushToast({ kind: "error", title: "Delete failed", body: errText(e) });
   }
 }
 

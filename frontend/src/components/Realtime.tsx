@@ -125,6 +125,16 @@ export default function Realtime() {
         }
       },
 
+      "message.updated": (msg) => {
+        const s = useStore.getState();
+        s.upsertMessage(msg.data.message);
+        if (msg.data.chat) s.upsertChat(msg.data.chat);
+      },
+
+      "message.hidden": (msg) => {
+        useStore.getState().removeMessage(msg.data.chat_id, msg.data.message_id);
+      },
+
       "typing": (msg) => {
         const s = useStore.getState();
         const { chat_id, composing, participant } = msg.data as { chat_id: number; composing: boolean; participant: string | null };
