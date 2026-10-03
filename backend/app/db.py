@@ -1,20 +1,23 @@
-"""SQLite database engine and session factory."""
+"""Database engine and session factory (SQLite file or Postgres such as Neon)."""
 
-import os
 from pathlib import Path
 
 from sqlalchemy import create_engine
-from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from app.config import settings
 
-# Ensure the data/ directory exists for SQLite
-db_path = settings.database_url.replace("sqlite:///", "")
-Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+url = settings.database_url
+is_sqlite = url.startswith("sqlite")
+
+if is_sqlite:
+    # Ensure the data/ directory exists for the SQLite file
+    Path(url.replace("sqlite:///", "")).parent.mkdir(parents=True, exist_ok=True)
 
 engine = create_engine(
-    settings.database_url,
-    connect_args={"check_same_thread": False},
+    url,
+    connect_args={"check_same_thread": False} if is_sqlite else {},
+    pool_pre_ping=True,  # Postgres hosts like Neon close idle connections
     echo=False,
 )
 
