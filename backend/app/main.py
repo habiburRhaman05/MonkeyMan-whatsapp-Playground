@@ -1,13 +1,18 @@
 """FastAPI application entry point."""
 
+import asyncio
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
+from app import evolution
 from app.config import settings
-from app.db import Base, engine
+from app.db import Base, SessionLocal, engine
+from app.models import Account
 from app.routers import accounts, chats, webhook
+from app.sync import sync_account
 from app.ws import manager
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(name)s  %(message)s")
@@ -16,7 +21,43 @@ logger = logging.getLogger(__name__)
 # Create tables on startup
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="WhatsApp Dashboard", version="0.1.0")
+
+async def _reapply_webhooks_and_sync() -> None:
+    """On startup, point every instance's webhook at the current WEBHOOK_BASE_URL, then catch up.
+
+    Evolution stores the webhook address when a number is created. If the address changed since
+    (different host, docker network, secret), events would silently stop arriving.
+    """
+    await asyncio.sleep(2)
+    db = SessionLocal()
+    try:
+        ids = [(a.id, a.instance_name) for a in db.query(Account).all()]
+    finally:
+        db.close()
+    for account_id, instance_name in ids:
+        try:
+            await evolution.set_webhook(instance_name, accounts.webhook_url(), accounts.WEBHOOK_EVENTS)
+        except Exception as exc:
+            logger.warning("Could not re-apply webhook for account %s: %s", account_id, type(exc).__name__)
+            continue
+        db = SessionLocal()
+        try:
+            acc = db.get(Account, account_id)
+            connected = bool(acc and acc.status == "connected")
+        finally:
+            db.close()
+        if connected:
+            await sync_account(account_id)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    task = asyncio.create_task(_reapply_webhooks_and_sync())
+    yield
+    task.cancel()
+
+
+app = FastAPI(title="WhatsApp Dashboard", version="0.1.0", lifespan=lifespan)
 
 # CORS — allow only the frontend origin
 app.add_middleware(

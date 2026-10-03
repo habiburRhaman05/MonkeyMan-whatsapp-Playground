@@ -25,7 +25,7 @@ WEBHOOK_EVENTS = [
 ]
 
 
-def _webhook_url() -> str:
+def webhook_url() -> str:
     return f"{settings.webhook_base_url}/webhook/evolution?secret={settings.webhook_secret}"
 
 
@@ -58,7 +58,7 @@ async def create_account(body: AccountCreate, db: Session = Depends(get_db)):
     try:
         result = await evolution.create_instance(
             instance_name=instance_name,
-            webhook_url=_webhook_url(),
+            webhook_url=webhook_url(),
             webhook_events=WEBHOOK_EVENTS,
         )
     except evolution.EvolutionError as exc:
