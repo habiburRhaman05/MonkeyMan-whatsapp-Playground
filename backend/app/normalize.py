@@ -141,17 +141,13 @@ def phone_from_jid(jid: str) -> str | None:
     return raw if raw.isdigit() and len(raw) >= 6 else None
 
 
-def _extract_quote(message: Any) -> tuple[str | None, str | None, str | None, str | None]:
-    """Extract quoted message info from contextInfo."""
-    m = message if isinstance(message, dict) else {}
-    for _ in range(3):
-        for w in _WRAPPERS:
-            inner = m.get(w)
-            if isinstance(inner, dict) and isinstance(inner.get("message"), dict):
-                m = inner["message"]
-                break
-        else:
-            break
+def _extract_quote(message: Any, top_level_ctx: Any = None) -> tuple[str | None, str | None, str | None, str | None]:
+    """Extract quoted message info from contextInfo.
+
+    The reply context normally sits inside the message part (extendedTextMessage.contextInfo, imageMessage...),
+    but history records from Evolution also carry it as a separate top-level `contextInfo`.
+    """
+    m = _unwrap(message)
     ctx = None
     for val in m.values():
         if isinstance(val, dict):
@@ -164,6 +160,8 @@ def _extract_quote(message: Any) -> tuple[str | None, str | None, str | None, st
             if isinstance(val, dict) and val.get("quotedMessage"):
                 ctx = val
                 break
+    if not ctx and isinstance(top_level_ctx, dict) and top_level_ctx.get("quotedMessage"):
+        ctx = top_level_ctx
     if not ctx:
         return None, None, None, None
     qid = ctx.get("stanzaId")
@@ -212,7 +210,7 @@ def parse_message(data: dict[str, Any]) -> ParsedMessage | None:
     from_me = bool(key.get("fromMe"))
     push = data.get("pushName") if isinstance(data.get("pushName"), str) else None
     is_group = jid.endswith("@g.us")
-    qid, qsender, qtext, qtype = _extract_quote(data.get("message"))
+    qid, qsender, qtext, qtype = _extract_quote(data.get("message"), data.get("contextInfo"))
     mimetype, filename = _extract_media_meta(data.get("message"))
     return ParsedMessage(
         jid=jid,

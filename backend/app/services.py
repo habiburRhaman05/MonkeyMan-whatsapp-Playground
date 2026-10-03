@@ -5,8 +5,8 @@ import json
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models import Chat, Message
-from app.normalize import ParsedMessage, preview_for
+from app.models import Account, Chat, Message
+from app.normalize import ParsedMessage, phone_from_jid, preview_for
 from app.serializers import load_reactions
 
 DELETED_PREVIEW = "🚫 This message was deleted"
@@ -23,6 +23,37 @@ def set_reaction(msg: Message, sender: str, emoji: str) -> None:
 
 def _find(db: Session, account_id: int, wa_id: str) -> Message | None:
     return db.query(Message).filter_by(account_id=account_id, wa_message_id=wa_id).first()
+
+
+def quoted_sender_label(q: Message, chat: Chat | None) -> str | None:
+    if q.from_me:
+        return "You"
+    return q.sender_name or (chat.name if chat and not chat.is_group else None)
+
+
+def set_quote_from(msg: Message, q: Message, chat: Chat | None) -> None:
+    """Attach `q` (a message in our DB) as the quoted message of `msg`."""
+    msg.quoted_message_id = q.wa_message_id
+    msg.quoted_sender = quoted_sender_label(q, chat) or q.sender_jid
+    msg.quoted_text = (q.text or "")[:500] or None
+    msg.quoted_type = q.type
+
+
+def resolve_quote(db: Session, account_id: int, msg: Message, chat: Chat) -> None:
+    """Replace the raw jid in an incoming reply's quote with a readable name, and fill in a missing preview."""
+    if not msg.quoted_message_id:
+        return
+    q = _find(db, account_id, msg.quoted_message_id)
+    if q:
+        msg.quoted_sender = quoted_sender_label(q, chat) or msg.quoted_sender
+        if not msg.quoted_text and q.text:
+            msg.quoted_text = q.text[:500]
+        if not msg.quoted_type:
+            msg.quoted_type = q.type
+        return
+    acc = db.get(Account, account_id)
+    if acc and acc.phone_number and msg.quoted_sender and phone_from_jid(msg.quoted_sender) == acc.phone_number:
+        msg.quoted_sender = "You"
 
 
 def apply_reaction(db: Session, account_id: int, r: dict) -> Message | None:
@@ -93,6 +124,7 @@ def store_message(db: Session, account_id: int, p: ParsedMessage, bump_unread: b
         media_filename=p.media_filename,
         sender_jid=p.sender_jid,
     )
+    resolve_quote(db, account_id, msg, chat)
     db.add(msg)
     touch_chat(chat, p.timestamp, p.type, p.text)
     if bump_unread and not p.from_me:

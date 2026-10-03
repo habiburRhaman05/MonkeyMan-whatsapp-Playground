@@ -17,7 +17,7 @@ from app.db import SessionLocal, get_db
 from app.models import Account, Chat, Contact, Message, utcnow
 from app.normalize import skip_jid
 from app.serializers import chat_out, contact_out, message_out, unread_total
-from app.services import apply_revoke, get_or_create_chat, set_reaction, touch_chat
+from app.services import apply_revoke, get_or_create_chat, set_quote_from, set_reaction, touch_chat
 from app.sync import sync_account
 from app.ws import manager
 
@@ -243,6 +243,33 @@ def _create_pending(db: Session, acc: Account, chat: Chat, msg_type: str, text: 
     return msg
 
 
+def _attach_quote(db: Session, acc: Account, chat: Chat, msg: Message, quoted_wa_id: str | None) -> None:
+    """Remember what this reply quotes, so the dashboard can show it (the phone gets it via Evolution)."""
+    if not quoted_wa_id:
+        return
+    q = db.query(Message).filter_by(account_id=acc.id, wa_message_id=quoted_wa_id, chat_id=chat.id).first()
+    if q:
+        set_quote_from(msg, q, chat)
+        db.commit()
+        db.refresh(msg)
+
+
+def _build_quoted(db: Session, account_id: int, chat: Chat, quoted_wa_id: str | None) -> dict | None:
+    """Evolution 'quoted' object: full key (fromMe + group sender) and, for text, the quoted content."""
+    if not quoted_wa_id:
+        return None
+    q = db.query(Message).filter_by(account_id=account_id, wa_message_id=quoted_wa_id, chat_id=chat.id).first()
+    if not q:
+        return {"key": {"remoteJid": chat.jid, "id": quoted_wa_id, "fromMe": False}}
+    key: dict = {"remoteJid": chat.jid, "id": q.wa_message_id, "fromMe": bool(q.from_me)}
+    if chat.is_group and not q.from_me and q.sender_jid:
+        key["participant"] = q.sender_jid
+    quoted: dict = {"key": key}
+    if q.type == "text" and q.text:
+        quoted["message"] = {"conversation": q.text}
+    return quoted
+
+
 async def _announce_new(db: Session, acc: Account, chat: Chat, msg: Message) -> None:
     total = unread_total(db, acc.id)
     await manager.broadcast(
@@ -272,7 +299,7 @@ async def _deliver(account_id: int, message_id: int, kind: str, payload: str, qu
             if gap < MIN_SEND_GAP:
                 await asyncio.sleep(MIN_SEND_GAP - gap)
             try:
-                quoted = {"key": {"remoteJid": chat.jid, "id": quoted_wa_id}} if quoted_wa_id else None
+                quoted = _build_quoted(db, account_id, chat, quoted_wa_id)
                 if kind == "text":
                     resp = await evolution.send_text(acc.instance_name, chat.jid, payload, quoted_msg=quoted)
                 else:
@@ -331,6 +358,7 @@ async def send_text(account_id: int, body: SendText, db: Session = Depends(get_d
         raise HTTPException(409, "Account is not connected")
     chat = _resolve_chat(db, acc, body.chat_id, body.to)
     msg = _create_pending(db, acc, chat, "text", text, body.client_id)
+    _attach_quote(db, acc, chat, msg, body.quoted_message_id)
     await _announce_new(db, acc, chat, msg)
     _spawn(_deliver(acc.id, msg.id, "text", text, quoted_wa_id=body.quoted_message_id))
     return {"message": message_out(msg), "chat": chat_out(chat)}
@@ -392,9 +420,7 @@ async def _deliver_media(account_id: int, message_id: int, payload: dict) -> Non
             if gap < MIN_SEND_GAP:
                 await asyncio.sleep(MIN_SEND_GAP - gap)
             try:
-                quoted = None
-                if payload.get("quoted_message_id"):
-                    quoted = {"key": {"remoteJid": chat.jid, "id": payload["quoted_message_id"]}}
+                quoted = _build_quoted(db, account_id, chat, payload.get("quoted_message_id"))
                 resp = await evolution.send_media(
                     acc.instance_name, chat.jid,
                     media_type=payload["media_type"],
@@ -453,6 +479,7 @@ async def send_media_endpoint(account_id: int, body: SendMedia, db: Session = De
         msg.media_filename = body.filename
         msg.media_mimetype = body.mimetype
         db.commit()
+    _attach_quote(db, acc, chat, msg, body.quoted_message_id)
     await _announce_new(db, acc, chat, msg)
     _spawn(_deliver_media(acc.id, msg.id, {
         "media_type": body.media_type,

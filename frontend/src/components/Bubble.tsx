@@ -65,18 +65,43 @@ function Media({ msg }: { msg: Message }) {
   );
 }
 
-function QuotedMessage({ quoted }: { quoted: Message["quoted"] }) {
+function quotedSenderLabel(sender: string): string {
+  if (!sender.includes("@")) return sender; // already a name, or "You"
+  const digits = sender.split("@")[0].split(":")[0];
+  return /^\d+$/.test(digits) ? `+${digits}` : "Unknown";
+}
+
+/** Scroll to the replied-to message if it is loaded, and flash it. */
+function jumpToQuoted(msg: Message) {
+  const target = useStore.getState().messages[msg.chat_id]?.find((m) => m.wa_message_id === msg.quoted?.message_id);
+  const el = target ? document.getElementById(`msg-${target.id}`) : null;
+  if (!el) {
+    useStore.getState().pushToast({ kind: "info", title: "Original message is not loaded", body: "Scroll up to load older messages." });
+    return;
+  }
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  el.classList.add("bg-yellow-100/70");
+  setTimeout(() => el.classList.remove("bg-yellow-100/70"), 1500);
+}
+
+function QuotedMessage({ msg }: { msg: Message }) {
+  const quoted = msg.quoted;
   if (!quoted) return null;
   const typeLabel = quoted.type && quoted.type !== "text" ? `[${LABELS[quoted.type] || quoted.type}] ` : "";
+  const sender = quoted.sender ? quotedSenderLabel(quoted.sender) : null;
   return (
-    <div className="border-l-4 border-primary/40 bg-black/5 rounded-r px-2 py-1 mb-1 text-xs">
-      {quoted.sender && (
-        <div className="font-semibold truncate" style={{ color: avatarColor(quoted.sender.split("@")[0]) }}>
-          {quoted.sender.split("@")[0]}
+    <button
+      type="button"
+      onClick={() => jumpToQuoted(msg)}
+      className="block w-full text-left border-l-4 border-primary/60 bg-black/5 hover:bg-black/10 rounded-r px-2 py-1 mb-1 text-xs"
+    >
+      {sender && (
+        <div className="font-semibold truncate" style={{ color: sender === "You" ? "var(--primary)" : avatarColor(sender) }}>
+          {sender}
         </div>
       )}
-      <div className="text-muted truncate">{typeLabel}{quoted.text || ""}</div>
-    </div>
+      <div className="text-muted line-clamp-2 break-words">{typeLabel}{quoted.text || (quoted.type ? "" : "Message")}</div>
+    </button>
   );
 }
 
@@ -222,7 +247,7 @@ export default function Bubble({ msg, isGroup, showName, accountId }: { msg: Mes
           </div>
         )}
 
-        <QuotedMessage quoted={msg.quoted} />
+        <QuotedMessage msg={msg} />
 
         {msg.type !== "text" && <Media msg={msg} />}
         {msg.text && <div className="whitespace-pre-wrap break-words text-[15px]">{msg.text}</div>}
