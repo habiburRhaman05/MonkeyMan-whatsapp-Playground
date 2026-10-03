@@ -2,7 +2,8 @@
 
 import { useMemo, useState, useCallback } from "react";
 import { useStore } from "@/lib/store";
-import { openChat, openChatWith, runSync } from "@/lib/actions";
+import { openChat, openChatWith, runSync, setChatFlags } from "@/lib/actions";
+import StarredList from "./StarredList";
 import { avatarColor, chatTitle, contactTitle, formatListTime, phoneFromJid } from "@/lib/util";
 import { Badge } from "./TopBar";
 import NewChatDialog from "./NewChatDialog";
@@ -44,14 +45,20 @@ export default function ChatList() {
   const contacts = useStore((s) => (s.activeAccountId ? s.contacts[s.activeAccountId] : undefined));
   const activeChatId = useStore((s) => s.activeChatId);
 
-  const [tab, setTab] = useState<"chats" | "contacts">("chats");
+  const [tab, setTab] = useState<"chats" | "contacts" | "starred">("chats");
   const [query, setQuery] = useState("");
   const [showNew, setShowNew] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
+  const [menuFor, setMenuFor] = useState<number | null>(null);
 
   const q = query.trim().toLowerCase();
+  const archivedCount = (chats ?? []).filter((c) => c.archived).length;
   const filteredChats = useMemo(
-    () => (chats ?? []).filter((c) => !q || chatTitle(c).toLowerCase().includes(q) || c.jid.includes(q)),
-    [chats, q],
+    () =>
+      (chats ?? []).filter(
+        (c) => !!c.archived === showArchived && (!q || chatTitle(c).toLowerCase().includes(q) || c.jid.includes(q)),
+      ),
+    [chats, q, showArchived],
   );
   const filteredContacts = useMemo(
     () => (contacts ?? []).filter((c) => !q || contactTitle(c).toLowerCase().includes(q) || c.jid.includes(q)),
@@ -62,7 +69,7 @@ export default function ChatList() {
     return <div className="flex-1 flex items-center justify-center text-muted p-6 text-center">Select a number above.</div>;
   }
 
-  const tabBtn = (id: "chats" | "contacts", label: string, count?: number) => (
+  const tabBtn = (id: "chats" | "contacts" | "starred", label: string, count?: number) => (
     <button
       onClick={() => setTab(id)}
       className={`flex-1 py-2.5 text-sm font-medium border-b-2 transition-colors ${
@@ -80,7 +87,7 @@ export default function ChatList() {
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder={tab === "chats" ? "Filter chats" : "Filter contacts"}
+          placeholder={tab === "contacts" ? "Filter contacts" : "Filter chats"}
           className="flex-1 min-w-0 px-3 py-2 text-sm rounded-lg bg-background focus:outline-none focus:ring-2 focus:ring-primary"
         />
         <button
@@ -106,9 +113,27 @@ export default function ChatList() {
       </div>
 
       <div className="flex border-b border-border">
-        {tabBtn("chats", "Chats", chats?.length)}
+        {tabBtn("chats", "Chats", (chats ?? []).filter((c) => !c.archived).length)}
         {tabBtn("contacts", "Contacts", contacts?.length)}
+        {tabBtn("starred", "Starred")}
       </div>
+
+      {tab === "chats" && showArchived && (
+        <button
+          onClick={() => setShowArchived(false)}
+          className="w-full text-left px-3 py-2 text-sm text-primary border-b border-border/60 hover:bg-background"
+        >
+          ← Back to chats · Archived ({archivedCount})
+        </button>
+      )}
+      {tab === "chats" && !showArchived && archivedCount > 0 && (
+        <button
+          onClick={() => setShowArchived(true)}
+          className="w-full text-left px-3 py-2 text-sm text-muted border-b border-border/60 hover:bg-background"
+        >
+          Archived ({archivedCount})
+        </button>
+      )}
 
       {account.status !== "connected" && (
         <div className="px-3 py-2 text-xs bg-warning/10 text-yellow-800 border-b border-warning/30">
@@ -126,31 +151,65 @@ export default function ChatList() {
             </p>
           ) : (
             filteredChats.map((c) => (
-              <button
-                key={c.id}
-                onClick={() => openChat(account.id, c.id)}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 text-left border-b border-border/60 hover:bg-background ${
-                  c.id === activeChatId ? "bg-background" : ""
-                }`}
-              >
-                <ProfileAvatar name={chatTitle(c)} url={c.profile_pic_url} />
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-baseline justify-between gap-2">
-                    <span className={`truncate ${c.unread_count ? "font-semibold" : "font-medium"}`}>{chatTitle(c)}</span>
-                    <span className={`text-xs shrink-0 ${c.unread_count ? "text-primary font-medium" : "text-muted"}`}>
-                      {formatListTime(c.last_message_at)}
-                    </span>
+              <div key={c.id} className={`group relative border-b border-border/60 hover:bg-background ${c.id === activeChatId ? "bg-background" : ""}`}>
+                <button onClick={() => openChat(account.id, c.id)} className="w-full flex items-center gap-3 px-3 py-2.5 text-left">
+                  <ProfileAvatar name={chatTitle(c)} url={c.profile_pic_url} />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span className={`truncate ${c.unread_count ? "font-semibold" : "font-medium"}`}>{chatTitle(c)}</span>
+                      <span className={`text-xs shrink-0 ${c.unread_count ? "text-primary font-medium" : "text-muted"}`}>
+                        {formatListTime(c.last_message_at)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className={`truncate text-sm ${c.unread_count ? "text-foreground" : "text-muted"}`}>
+                        {c.last_message_preview || "No messages"}
+                      </span>
+                      <span className="flex items-center gap-1 shrink-0">
+                        {c.muted && <span className="text-muted text-xs" title="Muted">🔇</span>}
+                        {c.pinned && <span className="text-muted text-xs" title="Pinned">📌</span>}
+                        <Badge n={c.unread_count} className={c.muted ? "bg-gray-400 text-white" : "bg-primary text-white"} />
+                      </span>
+                    </div>
                   </div>
-                  <div className="flex items-center justify-between gap-2">
-                    <span className={`truncate text-sm ${c.unread_count ? "text-foreground" : "text-muted"}`}>
-                      {c.last_message_preview || "No messages"}
-                    </span>
-                    <Badge n={c.unread_count} className="bg-primary text-white shrink-0" />
-                  </div>
-                </div>
-              </button>
+                </button>
+                <button
+                  onClick={() => setMenuFor(menuFor === c.id ? null : c.id)}
+                  aria-label="Chat options"
+                  className="absolute right-2 top-1.5 p-1 rounded-full bg-sidebar-bg/90 opacity-0 group-hover:opacity-100 focus:opacity-100 text-muted hover:text-foreground"
+                >
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                    <circle cx="12" cy="5" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="12" cy="19" r="1.5" />
+                  </svg>
+                </button>
+                {menuFor === c.id && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setMenuFor(null)} />
+                    <div className="absolute right-2 top-8 z-50 w-40 bg-white rounded-lg shadow-lg border border-border py-1">
+                      {[
+                        { label: c.pinned ? "Unpin chat" : "Pin chat", flags: { pinned: !c.pinned } },
+                        { label: c.archived ? "Unarchive" : "Archive chat", flags: { archived: !c.archived } },
+                        { label: c.muted ? "Unmute" : "Mute notifications", flags: { muted: !c.muted } },
+                      ].map((item) => (
+                        <button
+                          key={item.label}
+                          onClick={() => {
+                            setChatFlags(c, item.flags);
+                            setMenuFor(null);
+                          }}
+                          className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50"
+                        >
+                          {item.label}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
             ))
           )
+        ) : tab === "starred" ? (
+          <StarredList accountId={account.id} />
         ) : contacts === undefined ? (
           <p className="p-6 text-center text-muted text-sm animate-pulse">Loading contacts…</p>
         ) : filteredContacts.length === 0 ? (

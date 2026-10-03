@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { getMedia, type Message } from "@/lib/api";
-import { retry, reactMessage, forwardMsg, deleteMsg } from "@/lib/actions";
+import { retry, reactMessage, forwardMsg, deleteMsg, toggleStar } from "@/lib/actions";
 import { useStore } from "@/lib/store";
 import { avatarColor, formatTime } from "@/lib/util";
 import { REACTION_EMOJIS } from "./EmojiPicker";
@@ -111,6 +111,9 @@ function ContextMenu({ msg, accountId, onClose }: { msg: Message; accountId: num
   const [showReactions, setShowReactions] = useState(false);
   const [showDelete, setShowDelete] = useState(false);
   const sent = msg.status !== "pending" && msg.status !== "failed";
+  const [canEdit] = useState(
+    () => msg.from_me && msg.type === "text" && sent && Date.now() - new Date(msg.timestamp).getTime() < 14 * 60 * 1000,
+  );
 
   if (showDelete) {
     return (
@@ -172,6 +175,20 @@ function ContextMenu({ msg, accountId, onClose }: { msg: Message; accountId: num
         className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50"
       >
         Reply
+      </button>
+      {canEdit && (
+        <button
+          onClick={() => { useStore.getState().setEditing(msg); onClose(); }}
+          className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50"
+        >
+          Edit
+        </button>
+      )}
+      <button
+        onClick={() => { toggleStar(msg); onClose(); }}
+        className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50"
+      >
+        {msg.starred ? "Unstar" : "Star"}
       </button>
       <button
         onClick={() => setShowReactions(!showReactions)}
@@ -267,6 +284,8 @@ export default function Bubble({ msg, isGroup, showName, accountId }: { msg: Mes
               )}
             </>
           )}
+          {msg.starred && <span className="text-yellow-500" title="Starred">★</span>}
+          {msg.edited && <span className="italic">edited</span>}
           <span>{formatTime(msg.timestamp)}</span>
           {mine && <Ticks status={msg.status} />}
         </div>

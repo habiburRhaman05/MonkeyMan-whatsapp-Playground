@@ -36,6 +36,7 @@ interface State {
   wsUp: boolean;
   typing: Record<number, string | null>; // chat_id -> participant name or null
   replyTo: ReplyTo | null;
+  editing: Message | null;
 
   setAccounts: (a: Account[]) => void;
   patchAccount: (id: number, patch: Partial<Account>) => void;
@@ -57,6 +58,7 @@ interface State {
   setTyping: (chatId: number, participant: string | null) => void;
   clearTyping: (chatId: number) => void;
   setReplyTo: (r: ReplyTo | null) => void;
+  setEditing: (m: Message | null) => void;
 }
 
 const STATUS_RANK: Record<MsgStatus, number> = { pending: 0, failed: 1, sent: 2, delivered: 3, read: 4 };
@@ -66,6 +68,7 @@ const byTimeThenId =(a: Message, b: Message) =>
 
 const sortChats = (list: Chat[]) =>
   [...list].sort((a, b) => {
+    if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
     if (!a.last_message_at && !b.last_message_at) return b.id - a.id;
     if (!a.last_message_at) return 1;
     if (!b.last_message_at) return -1;
@@ -89,6 +92,7 @@ export const useStore = create<State>((set) => ({
   wsUp: false,
   typing: {},
   replyTo: null,
+  editing: null,
 
   setAccounts: (accounts) => set({ accounts, accountsLoaded: true }),
   patchAccount: (id, patch) =>
@@ -158,7 +162,8 @@ export const useStore = create<State>((set) => ({
     delete next[chatId];
     return { typing: next };
   }),
-  setReplyTo: (replyTo) => set({ replyTo }),
+  setReplyTo: (replyTo) => set({ replyTo, editing: null }),
+  setEditing: (editing) => set({ editing, replyTo: null }),
 }));
 
 export const totalUnread = (accounts: Account[]) => accounts.reduce((n, a) => n + (a.unread_total || 0), 0);

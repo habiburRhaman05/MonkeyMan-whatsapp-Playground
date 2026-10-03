@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     # CORS
     frontend_origin: str = "http://localhost:3001"
 
+    # Opening a chat in the dashboard tells WhatsApp the messages were read (blue ticks for the sender)
+    send_read_receipts: bool = True
+
     # extra="ignore": the shared .env also holds POSTGRES_* and NEXT_PUBLIC_* keys
     model_config = {
         "env_file": (str(_ROOT_ENV), str(_BACKEND_ENV)),

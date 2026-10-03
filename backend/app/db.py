@@ -42,7 +42,12 @@ def get_db():
 def run_migrations() -> None:
     """Add columns that exist in the models but not yet in the DB."""
     _COLUMNS = {
-        "chats": [("profile_pic_url", "VARCHAR(500)")],
+        "chats": [
+            ("profile_pic_url", "VARCHAR(500)"),
+            ("pinned", "BOOLEAN DEFAULT FALSE"),
+            ("archived", "BOOLEAN DEFAULT FALSE"),
+            ("muted", "BOOLEAN DEFAULT FALSE"),
+        ],
         "contacts": [("profile_pic_url", "VARCHAR(500)")],
         "messages": [
             ("quoted_message_id", "VARCHAR(120)"),
@@ -53,6 +58,8 @@ def run_migrations() -> None:
             ("reactions", "TEXT"),
             ("deleted", "BOOLEAN DEFAULT FALSE"),
             ("hidden", "BOOLEAN DEFAULT FALSE"),
+            ("edited", "BOOLEAN DEFAULT FALSE"),
+            ("starred", "BOOLEAN DEFAULT FALSE"),
             ("media_mimetype", "VARCHAR(100)"),
             ("media_filename", "VARCHAR(300)"),
         ],

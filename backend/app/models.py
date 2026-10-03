@@ -39,6 +39,10 @@ class Chat(Base):
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_message_preview: Mapped[str | None] = mapped_column(String(200), nullable=True)
     unread_count: Mapped[int] = mapped_column(Integer, default=0)
+    # dashboard-only organisation (WhatsApp does not sync these to linked devices)
+    pinned: Mapped[bool | None] = mapped_column(Boolean, default=False, nullable=True)
+    archived: Mapped[bool | None] = mapped_column(Boolean, default=False, nullable=True)
+    muted: Mapped[bool | None] = mapped_column(Boolean, default=False, nullable=True)
 
     account: Mapped["Account"] = relationship(back_populates="chats")
     messages: Mapped[list["Message"]] = relationship(back_populates="chat", cascade="all, delete-orphan")
@@ -85,6 +89,9 @@ class Message(Base):
     # deleted for everyone (tombstone) / hidden in this dashboard only
     deleted: Mapped[bool | None] = mapped_column(Boolean, default=False, nullable=True)
     hidden: Mapped[bool | None] = mapped_column(Boolean, default=False, nullable=True)
+    edited: Mapped[bool | None] = mapped_column(Boolean, default=False, nullable=True)
+    # dashboard-only star
+    starred: Mapped[bool | None] = mapped_column(Boolean, default=False, nullable=True)
     # media metadata for sending
     media_mimetype: Mapped[str | None] = mapped_column(String(100), nullable=True)
     media_filename: Mapped[str | None] = mapped_column(String(300), nullable=True)

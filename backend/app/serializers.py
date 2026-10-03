@@ -44,6 +44,9 @@ def chat_out(c: Chat) -> dict:
         "last_message_at": iso(c.last_message_at),
         "last_message_preview": c.last_message_preview,
         "unread_count": c.unread_count,
+        "pinned": bool(c.pinned),
+        "archived": bool(c.archived),
+        "muted": bool(c.muted),
     }
 
 
@@ -79,6 +82,8 @@ def message_out(m: Message) -> dict:
         "status": m.status,
         "timestamp": iso(m.timestamp),
         "deleted": bool(m.deleted),
+        "edited": bool(m.edited),
+        "starred": bool(m.starred),
         "reactions": reactions_out(m),
     }
     if m.quoted_message_id:

@@ -210,6 +210,37 @@ export async function reactMessage(msg: api.Message, emoji: string) {
   }
 }
 
+export async function editMsg(msg: api.Message, text: string): Promise<boolean> {
+  try {
+    const r = await api.editMessage(msg.account_id, msg.id, text);
+    st().upsertMessage(r.message);
+    return true;
+  } catch (e) {
+    st().pushToast({ kind: "error", title: "Edit failed", body: errText(e) });
+    return false;
+  }
+}
+
+export async function toggleStar(msg: api.Message) {
+  try {
+    const r = await api.starMessage(msg.account_id, msg.id, !msg.starred);
+    st().upsertMessage(r.message);
+  } catch (e) {
+    st().pushToast({ kind: "error", title: "Could not star message", body: errText(e) });
+  }
+}
+
+/** Pin / archive / mute a chat. Applied instantly, rolled back if the server refuses. */
+export async function setChatFlags(chat: api.Chat, flags: Partial<Pick<api.Chat, "pinned" | "archived" | "muted">>) {
+  st().upsertChat({ ...chat, ...flags });
+  try {
+    st().upsertChat(await api.patchChat(chat.account_id, chat.id, flags));
+  } catch (e) {
+    st().upsertChat(chat);
+    st().pushToast({ kind: "error", title: "Could not update chat", body: errText(e) });
+  }
+}
+
 export async function deleteMsg(msg: api.Message, scope: "me" | "everyone") {
   try {
     const r = await api.deleteMessage(msg.account_id, msg.id, scope);

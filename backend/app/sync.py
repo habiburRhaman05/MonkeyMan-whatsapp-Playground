@@ -8,6 +8,7 @@ from app.models import Account, Chat, Contact
 from app.normalize import (
     STATUS_RANK,
     map_status,
+    parse_edit,
     parse_message,
     parse_reaction,
     parse_revoke,
@@ -16,7 +17,7 @@ from app.normalize import (
     skip_jid,
 )
 from app.serializers import unread_total
-from app.services import apply_reaction, apply_revoke, get_or_create_chat, store_message, touch_chat
+from app.services import apply_edit, apply_reaction, apply_revoke, get_or_create_chat, store_message, touch_chat
 from app.ws import manager
 
 logger = logging.getLogger(__name__)
@@ -109,6 +110,10 @@ async def sync_account(account_id: int, chat_limit: int = 30, msg_limit: int = 3
                 revoked = parse_revoke(rec)
                 if revoked:
                     apply_revoke(db, account_id, revoked)
+                    continue
+                edit = parse_edit(rec)
+                if edit:
+                    apply_edit(db, account_id, edit[0], edit[1])
 
         # 3. Contacts
         contacts = await evolution.find_contacts(name)

@@ -61,6 +61,9 @@ export interface Chat {
   last_message_at: string | null;
   last_message_preview: string | null;
   unread_count: number;
+  pinned: boolean;
+  archived: boolean;
+  muted: boolean;
 }
 
 export interface QuotedInfo {
@@ -90,6 +93,8 @@ export interface Message {
   timestamp: string;
   quoted?: QuotedInfo;
   deleted?: boolean;
+  edited?: boolean;
+  starred?: boolean;
   reactions?: Reaction[];
   media_mimetype?: string;
   media_filename?: string;
@@ -180,7 +185,23 @@ export const sendMedia = (
 export const reactToMessage = (accountId: number, messageId: number, emoji: string) =>
   post<{ message: Message }>(`/accounts/${accountId}/messages/${messageId}/react`, { emoji });
 
-export const deleteMessage = (accountId: number, messageId: number, scope: "me" | "everyone") =>
+export const editMessage = (accountId: number, messageId: number, text: string) =>
+  post<{ message: Message }>(`/accounts/${accountId}/messages/${messageId}/edit`, { text });
+
+export const starMessage = (accountId: number, messageId: number, starred: boolean) =>
+  post<{ message: Message }>(`/accounts/${accountId}/messages/${messageId}/star`, { starred });
+
+export const listStarred = (accountId: number) =>
+  request<{ message: Message; chat: Chat }[]>(`/accounts/${accountId}/starred`);
+
+export const patchChat = (
+  accountId: number,
+  chatId: number,
+  flags: Partial<Pick<Chat, "pinned" | "archived" | "muted">>,
+) =>
+  request<Chat>(`/accounts/${accountId}/chats/${chatId}`, { method: "PATCH", body: JSON.stringify(flags) });
+
+export const deleteMessage =(accountId: number, messageId: number, scope: "me" | "everyone") =>
   post<{ ok?: boolean; message?: Message }>(`/accounts/${accountId}/messages/${messageId}/delete`, { scope });
 
 export const forwardMessage = (accountId: number, messageId: number, target: { to_chat_id?: number; to?: string }) =>

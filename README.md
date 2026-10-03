@@ -19,8 +19,12 @@ A web dashboard to connect several WhatsApp numbers, switch between them, read c
 - Record and send **voice notes** (microphone button); play received voice notes and images on demand
 - **Emoji picker** (smiley button next to the text box)
 - **Reply / quote messages** (right-click or tap the ⋮ menu on any bubble)
-- **React to messages** with quick emoji reactions
+- **React to messages** with quick emoji reactions (incoming reactions show too)
 - **Forward messages** to other chats
+- **Delete** your messages for everyone, or hide any message for yourself; messages deleted by the other person show as "This message was deleted"
+- **Edit** your own text messages (WhatsApp allows 15 minutes); edits made on the phone update here
+- **Read receipts:** opening a chat sends real blue ticks and clears the unread count on your phone (turn off with `SEND_READ_RECEIPTS=false`)
+- **Star** messages and see them in the Starred tab; **pin, archive and mute** chats (muted chats keep their badge but never make sound or alerts). Star, pin, archive and mute live in this dashboard only; they are not synced to your phone.
 - **Search in chat** (magnifying glass in the conversation header)
 - **Profile view panel** (click the name/avatar in the conversation header)
 - **Typing indicators** (dots appear when the other person is typing)
@@ -150,7 +154,8 @@ Use `tmux` or `pm2` to keep the backend and frontend running after you disconnec
 
 - Incoming images/video/documents/voice load on demand (click Open / Play).
 - No calling and no SMS.
-- Opening a chat marks it read **in the dashboard only**; no read receipt is sent to the contact, and the phone's own unread count is unchanged.
+- "Delete for me" hides a message in this dashboard only; it stays on your phone. Deleting for everyone works only on your own messages, within WhatsApp's time limit.
+- Opening a chat sends a read receipt for its unread messages (the sender sees blue ticks). Set `SEND_READ_RECEIPTS=false` in `.env` to only clear the dashboard's own badge.
 - A failed voice note cannot be retried; record it again.
 - Voice recording needs `localhost` or https (browser rule) and microphone permission.
 - Messages that arrive while the backend is stopped are not delivered live; press ↻ sync to import recent history.

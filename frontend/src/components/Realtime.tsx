@@ -108,6 +108,7 @@ export default function Realtime() {
           markChatRead(accId, chat.id);
           return;
         }
+        if (chat.muted) return; // muted: badge only, no sound / toast / desktop alert
         notify(accId, account_label, chat, message);
       },
 

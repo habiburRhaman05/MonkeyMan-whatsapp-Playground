@@ -268,6 +268,20 @@ def parse_reaction(data: dict[str, Any]) -> dict | None:
     return {"jid": jid, "target": str(target), "emoji": r.get("text") or "", "sender": sender}
 
 
+def parse_edit(data: dict[str, Any]) -> tuple[str, str] | None:
+    """(wa id of the edited message, new text) when this event is a message edit."""
+    if not isinstance(data, dict):
+        return None
+    p = _unwrap(data.get("message")).get("protocolMessage")
+    if not isinstance(p, dict) or str(p.get("type", "")).upper() not in ("MESSAGE_EDIT", "14"):
+        return None
+    target = (p.get("key") or {}).get("id")
+    classified = _classify(p.get("editedMessage"))
+    if not target or classified is None or classified[0] != "text":
+        return None
+    return str(target), classified[1] or ""
+
+
 def parse_revoke(data: dict[str, Any]) -> str | None:
     """wa id of the message that was deleted for everyone, if this event is a revoke."""
     if not isinstance(data, dict):

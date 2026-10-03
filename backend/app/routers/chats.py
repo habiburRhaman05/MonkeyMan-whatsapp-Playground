@@ -5,6 +5,7 @@ import logging
 import re
 import time
 import uuid
+from datetime import timedelta
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -13,11 +14,12 @@ from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app import evolution
+from app.config import settings
 from app.db import SessionLocal, get_db
 from app.models import Account, Chat, Contact, Message, utcnow
 from app.normalize import skip_jid
 from app.serializers import chat_out, contact_out, message_out, unread_total
-from app.services import apply_revoke, get_or_create_chat, set_quote_from, set_reaction, touch_chat
+from app.services import apply_edit, apply_revoke, get_or_create_chat, set_quote_from, set_reaction, touch_chat
 from app.sync import sync_account
 from app.ws import manager
 
@@ -130,11 +132,40 @@ def list_messages(
     return {"messages": [message_out(m) for m in rows], "has_more": has_more}
 
 
+async def _send_read_receipts(account_id: int, items: list[dict]) -> None:
+    db = SessionLocal()
+    try:
+        acc = db.get(Account, account_id)
+        if not acc or acc.status != "connected":
+            return
+        await evolution.mark_messages_read(acc.instance_name, items)
+    except (evolution.EvolutionError, httpx.HTTPError) as exc:
+        logger.warning("Read receipt failed (account %s): %s", account_id, type(exc).__name__)
+    finally:
+        db.close()
+
+
 @router.post("/chats/{chat_id}/read")
 async def mark_read(account_id: int, chat_id: int, db: Session = Depends(get_db)):
     acc = _account(db, account_id)
     chat = _chat(db, acc, chat_id)
     if chat.unread_count:
+        if settings.send_read_receipts and acc.status == "connected":
+            unread = (
+                db.query(Message)
+                .filter(Message.chat_id == chat.id, Message.from_me.is_(False), Message.deleted.is_not(True))
+                .order_by(Message.timestamp.desc(), Message.id.desc())
+                .limit(min(chat.unread_count, 20))
+                .all()
+            )
+            items = []
+            for m in unread:
+                item = {"remoteJid": chat.jid, "fromMe": False, "id": m.wa_message_id}
+                if chat.is_group and m.sender_jid:
+                    item["participant"] = m.sender_jid
+                items.append(item)
+            if items:
+                _spawn(_send_read_receipts(acc.id, items))
         chat.unread_count = 0
         db.commit()
         await manager.broadcast(
@@ -521,6 +552,105 @@ async def react_to_message(account_id: int, message_id: int, body: SendReaction,
     out = message_out(msg)
     await manager.broadcast("message.updated", {"account_id": acc.id, "data": {"message": out}})
     return {"message": out}
+
+
+# ── edit ──────────────────────────────────────────────────
+
+EDIT_WINDOW = timedelta(minutes=15)
+
+
+class EditBody(BaseModel):
+    text: str
+
+
+@router.post("/messages/{message_id}/edit")
+async def edit_message(account_id: int, message_id: int, body: EditBody, db: Session = Depends(get_db)):
+    acc = _account(db, account_id)
+    msg = db.get(Message, message_id)
+    if not msg or msg.account_id != acc.id:
+        raise HTTPException(404, "Message not found")
+    text = body.text.strip()
+    if not text:
+        raise HTTPException(400, "Message is empty")
+    if not msg.from_me or msg.type != "text" or msg.deleted:
+        raise HTTPException(400, "Only your own text messages can be edited")
+    if msg.wa_message_id.startswith("pending-") or msg.status in ("pending", "failed"):
+        raise HTTPException(400, "This message was not sent yet")
+    if utcnow() - msg.timestamp > EDIT_WINDOW:
+        raise HTTPException(400, "WhatsApp only allows editing within 15 minutes of sending")
+    if acc.status != "connected":
+        raise HTTPException(409, "Account is not connected")
+    if text == msg.text:
+        return {"message": message_out(msg)}
+    chat = db.get(Chat, msg.chat_id)
+    try:
+        await evolution.edit_message(acc.instance_name, chat.jid, msg.wa_message_id, text)
+    except evolution.EvolutionError as exc:
+        raise HTTPException(502, f"Edit failed (HTTP {exc.status_code}): {exc.detail[:200]}")
+    except httpx.HTTPError:
+        raise HTTPException(502, "Cannot reach Evolution API")
+    result = apply_edit(db, acc.id, msg.wa_message_id, text)
+    if result:
+        msg, chat = result
+    out = message_out(msg)
+    await manager.broadcast("message.updated", {"account_id": acc.id, "data": {"message": out, "chat": chat_out(chat)}})
+    return {"message": out}
+
+
+# ── star (dashboard only) ─────────────────────────────────
+
+class StarBody(BaseModel):
+    starred: bool
+
+
+@router.post("/messages/{message_id}/star")
+async def star_message(account_id: int, message_id: int, body: StarBody, db: Session = Depends(get_db)):
+    acc = _account(db, account_id)
+    msg = db.get(Message, message_id)
+    if not msg or msg.account_id != acc.id:
+        raise HTTPException(404, "Message not found")
+    msg.starred = body.starred
+    db.commit()
+    out = message_out(msg)
+    await manager.broadcast("message.updated", {"account_id": acc.id, "data": {"message": out}})
+    return {"message": out}
+
+
+@router.get("/starred")
+def list_starred(account_id: int, db: Session = Depends(get_db)):
+    acc = _account(db, account_id)
+    rows = (
+        db.query(Message, Chat)
+        .join(Chat, Chat.id == Message.chat_id)
+        .filter(Message.account_id == acc.id, Message.starred.is_(True), Message.hidden.is_not(True))
+        .order_by(Message.timestamp.desc())
+        .limit(200)
+        .all()
+    )
+    return [{"message": message_out(m), "chat": chat_out(c)} for m, c in rows]
+
+
+# ── pin / archive / mute (dashboard only) ─────────────────
+
+class ChatFlags(BaseModel):
+    pinned: bool | None = None
+    archived: bool | None = None
+    muted: bool | None = None
+
+
+@router.patch("/chats/{chat_id}")
+async def update_chat_flags(account_id: int, chat_id: int, body: ChatFlags, db: Session = Depends(get_db)):
+    acc = _account(db, account_id)
+    chat = _chat(db, acc, chat_id)
+    for field in ("pinned", "archived", "muted"):
+        value = getattr(body, field)
+        if value is not None:
+            setattr(chat, field, value)
+    db.commit()
+    await manager.broadcast(
+        "chat.updated", {"account_id": acc.id, "data": {"chat": chat_out(chat), "unread_total": unread_total(db, acc.id)}}
+    )
+    return chat_out(chat)
 
 
 # ── delete ────────────────────────────────────────────────

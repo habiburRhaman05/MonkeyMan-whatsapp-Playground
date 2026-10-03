@@ -65,6 +65,20 @@ def apply_reaction(db: Session, account_id: int, r: dict) -> Message | None:
     return msg
 
 
+def apply_edit(db: Session, account_id: int, wa_id: str, text: str) -> tuple[Message, Chat] | None:
+    msg = _find(db, account_id, wa_id)
+    if not msg or msg.deleted or msg.type != "text":
+        return None
+    msg.text = text
+    msg.edited = True
+    chat = db.get(Chat, msg.chat_id)
+    newest = db.query(Message).filter(Message.chat_id == chat.id).order_by(Message.timestamp.desc(), Message.id.desc()).first()
+    if newest and newest.id == msg.id:
+        chat.last_message_preview = preview_for("text", text)
+    db.commit()
+    return msg, chat
+
+
 def apply_revoke(db: Session, account_id: int, wa_id: str) -> tuple[Message, Chat] | None:
     """Turn a message into a 'deleted' tombstone. Returns None if unknown or already deleted."""
     msg = _find(db, account_id, wa_id)

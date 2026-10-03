@@ -185,6 +185,20 @@ async def delete_message_for_everyone(instance_name: str, to: str, message_id: s
     return await _request("DELETE", f"/chat/deleteMessageForEveryone/{instance_name}", json=body)
 
 
+async def mark_messages_read(instance_name: str, items: list[dict]) -> dict[str, Any]:
+    """POST /chat/markMessageAsRead/{instance} {readMessages:[{remoteJid, fromMe, id, participant?}]}"""
+    return await _request("POST", f"/chat/markMessageAsRead/{instance_name}", json={"readMessages": items})
+
+
+async def edit_message(instance_name: str, to: str, message_id: str, text: str) -> dict[str, Any]:
+    """POST /chat/updateMessage/{instance} {number, key:{remoteJid, fromMe, id}, text} (own messages only)"""
+    return await _request(
+        "POST",
+        f"/chat/updateMessage/{instance_name}",
+        json={"number": to, "key": {"remoteJid": to, "fromMe": True, "id": message_id}, "text": text},
+    )
+
+
 async def send_presence(instance_name: str, to: str, composing: bool = True) -> dict[str, Any]:
     """POST /chat/sendPresence/{instance} -> typing/recording indicator."""
     return await _request(

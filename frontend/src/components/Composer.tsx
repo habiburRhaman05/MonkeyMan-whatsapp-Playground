@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
-import { sendTextMessage, sendVoiceMessage, sendMediaMessage, emitTyping } from "@/lib/actions";
+import { sendTextMessage, sendVoiceMessage, sendMediaMessage, emitTyping, editMsg } from "@/lib/actions";
 import { newClientId } from "@/lib/util";
 import EmojiPicker from "./EmojiPicker";
 
@@ -23,6 +23,7 @@ export default function Composer({ accountId, chatId, disabled }: { accountId: n
   const [seconds, setSeconds] = useState(0);
   const [showEmoji, setShowEmoji] = useState(false);
   const replyTo = useStore((s) => s.replyTo);
+  const editing = useStore((s) => s.editing);
   const areaRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -46,6 +47,13 @@ export default function Composer({ accountId, chatId, disabled }: { accountId: n
     useStore.getState().setReplyTo(null);
     areaRef.current?.focus();
   }, [chatId]);
+
+  // Start editing: load the message text into the box
+  useEffect(() => {
+    if (!editing) return;
+    setText(editing.text ?? "");
+    areaRef.current?.focus();
+  }, [editing]);
   useEffect(() => () => { cancelRef.current = true; recorderRef.current?.state !== "inactive" && recorderRef.current?.stop(); stopStream(); }, []);
 
   useEffect(() => {
@@ -65,9 +73,20 @@ export default function Composer({ accountId, chatId, disabled }: { accountId: n
     el.style.height = Math.min(el.scrollHeight, 140) + "px";
   }, [text]);
 
-  function send() {
+  function cancelEdit() {
+    useStore.getState().setEditing(null);
+    setText("");
+  }
+
+  async function send() {
     const t = text.trim();
     if (!t || disabled) return;
+    const target = useStore.getState().editing;
+    if (target) {
+      if (t !== target.text && !(await editMsg(target, t))) return; // keep the text so the user can retry
+      cancelEdit();
+      return;
+    }
     const reply = useStore.getState().replyTo;
     setText("");
     useStore.getState().setReplyTo(null);
@@ -152,6 +171,20 @@ export default function Composer({ accountId, chatId, disabled }: { accountId: n
 
   return (
     <div className="bg-background border-t border-border shrink-0">
+      {editing && (
+        <div className="px-4 py-2 flex items-center gap-2 border-b border-border bg-gray-50">
+          <div className="flex-1 min-w-0 border-l-4 border-primary pl-2">
+            <div className="text-xs font-semibold text-primary">Editing message</div>
+            <div className="text-xs text-muted truncate">{editing.text}</div>
+          </div>
+          <button onClick={cancelEdit} className="p-1 text-muted hover:text-foreground" title="Cancel (Esc)">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <path d="M18 6L6 18M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+      )}
+
       {/* Reply indicator */}
       {replyTo && (
         <div className="px-4 py-2 flex items-center gap-2 border-b border-border bg-gray-50">
@@ -239,6 +272,10 @@ export default function Composer({ accountId, chatId, disabled }: { accountId: n
               placeholder="Type a message"
               onChange={(e) => handleInput(e.target.value)}
               onKeyDown={(e) => {
+                if (e.key === "Escape" && useStore.getState().editing) {
+                  cancelEdit();
+                  return;
+                }
                 if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault();
                   send();

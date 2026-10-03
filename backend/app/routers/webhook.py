@@ -18,9 +18,9 @@ from app import evolution
 from app.config import settings
 from app.db import SessionLocal
 from app.models import Account, Message
-from app.normalize import better_status, map_status, parse_message, parse_reaction, parse_revoke
+from app.normalize import better_status, map_status, parse_edit, parse_message, parse_reaction, parse_revoke
 from app.serializers import chat_out, message_out, unread_total
-from app.services import apply_reaction, apply_revoke, store_message
+from app.services import apply_edit, apply_reaction, apply_revoke, store_message
 from app.sync import sync_account
 from app.ws import manager
 
@@ -163,6 +163,16 @@ async def _handle_messages_upsert(instance_name: str, body: dict) -> None:
             if revoked:
                 _save_sample("MESSAGES_UPSERT_REVOKE", item)
                 await _announce_revoked(db, acc.id, revoked)
+                continue
+            edit = parse_edit(item)
+            if edit:
+                _save_sample("MESSAGES_UPSERT_EDIT", item)
+                result = apply_edit(db, acc.id, edit[0], edit[1])
+                if result:
+                    await manager.broadcast(
+                        "message.updated",
+                        {"account_id": acc.id, "data": {"message": message_out(result[0]), "chat": chat_out(result[1])}},
+                    )
                 continue
             p = parse_message(item)
             if not p:
