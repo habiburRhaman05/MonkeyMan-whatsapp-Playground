@@ -1,0 +1,13 @@
+.env
+data/
+node_modules/
+.next/
+__pycache__/
+*.pyc
+.venv/
+backend/.venv/
+.DS_Store
+Thumbs.db
+*.egg-info/
+dist/
+build/

@@ -1,0 +1,204 @@
+"""Webhook receiver for Evolution API events.
+
+Handles CONNECTION_UPDATE, QRCODE_UPDATED, MESSAGES_UPSERT, MESSAGES_UPDATE.
+The first payload of each event type is saved (API key redacted, long strings cut)
+to docs/payloads/ so parsers can be checked against real data.
+"""
+
+import asyncio
+import hmac
+import json
+import logging
+from pathlib import Path
+from typing import Any
+
+from fastapi import APIRouter, HTTPException, Query, Request, status
+
+from app import evolution
+from app.config import settings
+from app.db import SessionLocal
+from app.models import Account, Message
+from app.normalize import better_status, map_status, parse_message
+from app.serializers import chat_out, message_out, unread_total
+from app.services import store_message
+from app.sync import sync_account
+from app.ws import manager
+
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/webhook", tags=["webhook"])
+
+PAYLOADS_DIR = Path(__file__).resolve().parent.parent.parent.parent / "docs" / "payloads"
+PAYLOADS_DIR.mkdir(parents=True, exist_ok=True)
+_saved_events: set[str] = set()
+_bg_tasks: set[asyncio.Task] = set()
+
+
+def _redact(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {k: ("REDACTED" if k.lower() == "apikey" else _redact(v)) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact(v) for v in value[:5]]
+    if isinstance(value, str) and len(value) > 300:
+        return value[:300] + "...[cut]"
+    return value
+
+
+def _save_sample(event: str, payload: dict) -> None:
+    if event in _saved_events:
+        return
+    _saved_events.add(event)
+    path = PAYLOADS_DIR / f"{event}.json"
+    if not path.exists():
+        path.write_text(json.dumps(_redact(payload), indent=2, default=str), encoding="utf-8")
+
+
+def _spawn(coro) -> None:
+    task = asyncio.create_task(coro)
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
+
+
+@router.post("/evolution")
+async def evolution_webhook(request: Request, secret: str = Query(...)):
+    if not hmac.compare_digest(secret, settings.webhook_secret):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Bad secret")
+
+    body: dict[str, Any] = await request.json()
+    event = str(body.get("event", "")).upper().replace(".", "_")
+    instance_name = body.get("instance", "")
+    _save_sample(event, body)
+
+    try:
+        if event == "CONNECTION_UPDATE":
+            await _handle_connection_update(instance_name, body)
+        elif event == "QRCODE_UPDATED":
+            await _handle_qrcode_updated(instance_name, body)
+        elif event == "MESSAGES_UPSERT":
+            await _handle_messages_upsert(instance_name, body)
+        elif event == "MESSAGES_UPDATE":
+            await _handle_messages_update(instance_name, body)
+    except Exception:
+        logger.exception("Webhook %s failed", event)
+    return {"ok": True}
+
+
+def _items(data: Any) -> list[dict]:
+    if isinstance(data, list):
+        return [d for d in data if isinstance(d, dict)]
+    return [data] if isinstance(data, dict) else []
+
+
+async def _delayed_sync(account_id: int) -> None:
+    await asyncio.sleep(10)  # let Evolution finish importing history first
+    await sync_account(account_id)
+
+
+async def _handle_connection_update(instance_name: str, body: dict) -> None:
+    data = body.get("data") or {}
+    state = data.get("state", "")
+
+    db = SessionLocal()
+    try:
+        acc = db.query(Account).filter_by(instance_name=instance_name).first()
+        if not acc:
+            return
+        was_connected = acc.status == "connected"
+        acc.status = "connected" if state == "open" else "disconnected" if state == "close" else "connecting"
+
+        if state == "open":
+            try:
+                owner = await evolution.fetch_owner_jid(instance_name)
+                if owner:
+                    acc.phone_number = owner.split("@")[0].split(":")[0]
+            except Exception:
+                logger.warning("Could not fetch phone number for %s", instance_name)
+        db.commit()
+
+        await manager.broadcast(
+            "account.status",
+            {"account_id": acc.id, "data": {"status": acc.status, "phone_number": acc.phone_number}},
+        )
+        if acc.status == "connected" and not was_connected:
+            _spawn(_delayed_sync(acc.id))
+    finally:
+        db.close()
+
+
+async def _handle_qrcode_updated(instance_name: str, body: dict) -> None:
+    data = body.get("data") or {}
+    qr = data.get("qrcode")
+    qr_base64 = qr.get("base64") if isinstance(qr, dict) else qr
+
+    db = SessionLocal()
+    try:
+        acc = db.query(Account).filter_by(instance_name=instance_name).first()
+        if not acc:
+            return
+        await manager.broadcast(
+            "account.status", {"account_id": acc.id, "data": {"status": "connecting", "qr_base64": qr_base64}}
+        )
+    finally:
+        db.close()
+
+
+async def _handle_messages_upsert(instance_name: str, body: dict) -> None:
+    db = SessionLocal()
+    try:
+        acc = db.query(Account).filter_by(instance_name=instance_name).first()
+        if not acc:
+            return
+        for item in _items(body.get("data")):
+            p = parse_message(item)
+            if not p:
+                continue
+            chat, msg, created = store_message(db, acc.id, p, bump_unread=True)
+            if not created:
+                continue
+            total = unread_total(db, acc.id)
+            await manager.broadcast(
+                "message.new",
+                {
+                    "account_id": acc.id,
+                    "data": {
+                        "message": message_out(msg),
+                        "chat": chat_out(chat),
+                        "account_label": acc.label,
+                        "unread_total": total,
+                    },
+                },
+            )
+            await manager.broadcast(
+                "chat.updated", {"account_id": acc.id, "data": {"chat": chat_out(chat), "unread_total": total}}
+            )
+    finally:
+        db.close()
+
+
+async def _handle_messages_update(instance_name: str, body: dict) -> None:
+    db = SessionLocal()
+    try:
+        acc = db.query(Account).filter_by(instance_name=instance_name).first()
+        if not acc:
+            return
+        for item in _items(body.get("data")):
+            key = item.get("key") if isinstance(item.get("key"), dict) else {}
+            wa_id = item.get("keyId") or item.get("messageId") or key.get("id")
+            if not wa_id:
+                continue
+            msg = db.query(Message).filter_by(account_id=acc.id, wa_message_id=str(wa_id)).first()
+            if not msg or not msg.from_me:
+                continue
+            new = map_status(item.get("status"), True)
+            if not better_status(msg.status, new):
+                continue
+            msg.status = new
+            db.commit()
+            await manager.broadcast(
+                "message.status",
+                {
+                    "account_id": acc.id,
+                    "data": {"message_id": msg.id, "chat_id": msg.chat_id, "status": new},
+                },
+            )
+    finally:
+        db.close()
