@@ -1,6 +1,12 @@
 """Application settings loaded from environment / .env file."""
 
+from pathlib import Path
+
 from pydantic_settings import BaseSettings
+
+# The project-root .env (shared with docker compose) and an optional backend/.env override.
+_ROOT_ENV = Path(__file__).resolve().parents[2] / ".env"
+_BACKEND_ENV = Path(__file__).resolve().parents[1] / ".env"
 
 
 class Settings(BaseSettings):
@@ -18,7 +24,12 @@ class Settings(BaseSettings):
     # CORS
     frontend_origin: str = "http://localhost:3001"
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    # extra="ignore": the shared .env also holds POSTGRES_* and NEXT_PUBLIC_* keys
+    model_config = {
+        "env_file": (str(_ROOT_ENV), str(_BACKEND_ENV)),
+        "env_file_encoding": "utf-8",
+        "extra": "ignore",
+    }
 
 
 settings = Settings()
