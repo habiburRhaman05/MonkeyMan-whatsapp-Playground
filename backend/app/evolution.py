@@ -133,15 +133,53 @@ async def fetch_owner_jid(instance_name: str) -> str | None:
 
 # ── Messages ─────────────────────────────────────────────
 
-async def send_text(instance_name: str, to: str, text: str) -> dict[str, Any]:
+async def send_text(instance_name: str, to: str, text: str, quoted_msg: dict | None = None) -> dict[str, Any]:
     """POST /message/sendText/{instance} {number, text} -> message object with key.id"""
-    return await _request("POST", f"/message/sendText/{instance_name}", json={"number": to, "text": text})
+    body: dict[str, Any] = {"number": to, "text": text}
+    if quoted_msg:
+        body["quoted"] = quoted_msg
+    return await _request("POST", f"/message/sendText/{instance_name}", json=body)
 
 
 async def send_audio(instance_name: str, to: str, audio_b64: str) -> dict[str, Any]:
     """POST /message/sendWhatsAppAudio/{instance} {number, audio(base64|url)} -> voice note"""
     return await _request(
         "POST", f"/message/sendWhatsAppAudio/{instance_name}", json={"number": to, "audio": audio_b64}
+    )
+
+
+async def send_media(instance_name: str, to: str, media_type: str, media_b64: str,
+                     mimetype: str, filename: str | None = None, caption: str | None = None,
+                     quoted_msg: dict | None = None) -> dict[str, Any]:
+    """POST /message/sendMedia/{instance} -> send image/video/document with optional caption and quote."""
+    body: dict[str, Any] = {
+        "number": to,
+        "mediatype": media_type,
+        "media": media_b64,
+        "mimetype": mimetype,
+    }
+    if filename:
+        body["fileName"] = filename
+    if caption:
+        body["caption"] = caption
+    if quoted_msg:
+        body["quoted"] = quoted_msg
+    return await _request("POST", f"/message/sendMedia/{instance_name}", json=body)
+
+
+async def send_reaction(instance_name: str, to: str, message_id: str, emoji: str) -> dict[str, Any]:
+    """POST /message/sendReaction/{instance} -> send emoji reaction to a message."""
+    return await _request(
+        "POST", f"/message/sendReaction/{instance_name}",
+        json={"key": {"remoteJid": to, "id": message_id}, "reaction": emoji},
+    )
+
+
+async def send_presence(instance_name: str, to: str, composing: bool = True) -> dict[str, Any]:
+    """POST /chat/sendPresence/{instance} -> typing/recording indicator."""
+    return await _request(
+        "POST", f"/chat/sendPresence/{instance_name}",
+        json={"number": to, "presence": "composing" if composing else "paused"},
     )
 
 

@@ -1,23 +1,25 @@
 """Database engine and session factory (SQLite file or Postgres such as Neon)."""
 
+import logging
 from pathlib import Path
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 url = settings.database_url
 is_sqlite = url.startswith("sqlite")
 
 if is_sqlite:
-    # Ensure the data/ directory exists for the SQLite file
     Path(url.replace("sqlite:///", "")).parent.mkdir(parents=True, exist_ok=True)
 
 engine = create_engine(
     url,
     connect_args={"check_same_thread": False} if is_sqlite else {},
-    pool_pre_ping=True,  # Postgres hosts like Neon close idle connections
+    pool_pre_ping=True,
     echo=False,
 )
 
@@ -35,3 +37,30 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def run_migrations() -> None:
+    """Add columns that exist in the models but not yet in the DB."""
+    _COLUMNS = {
+        "chats": [("profile_pic_url", "VARCHAR(500)")],
+        "contacts": [("profile_pic_url", "VARCHAR(500)")],
+        "messages": [
+            ("quoted_message_id", "VARCHAR(120)"),
+            ("quoted_sender", "VARCHAR(200)"),
+            ("quoted_text", "VARCHAR(500)"),
+            ("quoted_type", "VARCHAR(20)"),
+            ("reaction", "VARCHAR(20)"),
+            ("media_mimetype", "VARCHAR(100)"),
+            ("media_filename", "VARCHAR(300)"),
+        ],
+    }
+    insp = inspect(engine)
+    with engine.begin() as conn:
+        for table, cols in _COLUMNS.items():
+            if not insp.has_table(table):
+                continue
+            existing = {c["name"] for c in insp.get_columns(table)}
+            for col_name, col_type in cols:
+                if col_name not in existing:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type}"))
+                    logger.info("Added column %s.%s", table, col_name)

@@ -38,6 +38,7 @@ def chat_out(c: Chat) -> dict:
         "account_id": c.account_id,
         "jid": c.jid,
         "name": c.name,
+        "profile_pic_url": c.profile_pic_url,
         "is_group": c.is_group,
         "last_message_at": iso(c.last_message_at),
         "last_message_preview": c.last_message_preview,
@@ -46,7 +47,7 @@ def chat_out(c: Chat) -> dict:
 
 
 def message_out(m: Message) -> dict:
-    return {
+    d: dict = {
         "id": m.id,
         "account_id": m.account_id,
         "chat_id": m.chat_id,
@@ -59,7 +60,19 @@ def message_out(m: Message) -> dict:
         "status": m.status,
         "timestamp": iso(m.timestamp),
     }
+    if m.quoted_message_id:
+        d["quoted"] = {
+            "message_id": m.quoted_message_id,
+            "sender": m.quoted_sender,
+            "text": m.quoted_text,
+            "type": m.quoted_type,
+        }
+    if m.media_mimetype:
+        d["media_mimetype"] = m.media_mimetype
+    if m.media_filename:
+        d["media_filename"] = m.media_filename
+    return d
 
 
 def contact_out(c: Contact) -> dict:
-    return {"id": c.id, "account_id": c.account_id, "jid": c.jid, "name": c.name, "is_group": c.is_group}
+    return {"id": c.id, "account_id": c.account_id, "jid": c.jid, "name": c.name, "profile_pic_url": c.profile_pic_url, "is_group": c.is_group}

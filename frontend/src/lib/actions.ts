@@ -130,10 +130,10 @@ function optimistic(accountId: number, chatId: number, type: api.MsgType, text: 
   return temp;
 }
 
-export async function sendTextMessage(accountId: number, chatId: number, text: string, clientId: string) {
+export async function sendTextMessage(accountId: number, chatId: number, text: string, clientId: string, quotedWaId?: string) {
   const temp = optimistic(accountId, chatId, "text", text, clientId);
   try {
-    const r = await api.sendText(accountId, { chat_id: chatId }, text, clientId);
+    const r = await api.sendText(accountId, { chat_id: chatId }, text, clientId, quotedWaId);
     st().upsertMessage(r.message);
     st().upsertChat(r.chat);
   } catch (e) {
@@ -161,4 +161,76 @@ export async function retry(accountId: number, messageId: number, chatId: number
   } catch (e) {
     st().pushToast({ kind: "error", title: "Retry failed", body: errText(e) });
   }
+}
+
+export async function sendMediaMessage(
+  accountId: number,
+  chatId: number,
+  file: File,
+  caption: string,
+  clientId: string,
+) {
+  const mediaType: "image" | "video" | "document" = file.type.startsWith("image/")
+    ? "image"
+    : file.type.startsWith("video/")
+      ? "video"
+      : "document";
+  const temp = optimistic(accountId, chatId, mediaType, caption || `[${mediaType}]`, clientId);
+  try {
+    const b64 = await fileToBase64(file);
+    const r = await api.sendMedia(accountId, { chat_id: chatId }, b64, mediaType, file.type, clientId, file.name, caption || undefined);
+    st().upsertMessage(r.message);
+    st().upsertChat(r.chat);
+  } catch (e) {
+    st().patchMessageStatus(chatId, temp.id, "failed");
+    st().pushToast({ kind: "error", title: "Send failed", body: errText(e) });
+  }
+}
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const result = String(reader.result);
+      resolve(result.split(",", 2)[1] ?? "");
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+export async function reactMessage(accountId: number, messageId: number, waMessageId: string, emoji: string) {
+  try {
+    await api.reactToMessage(accountId, messageId, waMessageId, emoji);
+  } catch (e) {
+    st().pushToast({ kind: "error", title: "Reaction failed", body: errText(e) });
+  }
+}
+
+export async function forwardMsg(accountId: number, messageId: number, toChatId: number) {
+  try {
+    const r = await api.forwardMessage(accountId, messageId, { to_chat_id: toChatId });
+    st().upsertMessage(r.message);
+    st().upsertChat(r.chat);
+    st().pushToast({ kind: "info", title: "Message forwarded" });
+  } catch (e) {
+    st().pushToast({ kind: "error", title: "Forward failed", body: errText(e) });
+  }
+}
+
+export async function searchInChat(accountId: number, chatId: number, q: string) {
+  try {
+    const r = await api.searchMessages(accountId, chatId, q);
+    return r.messages;
+  } catch (e) {
+    st().pushToast({ kind: "error", title: "Search failed", body: errText(e) });
+    return [];
+  }
+}
+
+let typingTimer: ReturnType<typeof setTimeout> | null = null;
+export function emitTyping(accountId: number, chatId: number) {
+  if (typingTimer) return;
+  api.sendTyping(accountId, chatId).catch(() => {});
+  typingTimer = setTimeout(() => { typingTimer = null; }, 5000);
 }

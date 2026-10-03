@@ -125,6 +125,17 @@ export default function Realtime() {
         }
       },
 
+      "typing": (msg) => {
+        const s = useStore.getState();
+        const { chat_id, composing, participant } = msg.data as { chat_id: number; composing: boolean; participant: string | null };
+        if (composing) {
+          s.setTyping(chat_id, participant);
+          setTimeout(() => s.clearTyping(chat_id), 8000);
+        } else {
+          s.clearTyping(chat_id);
+        }
+      },
+
       "sync.done": (msg) => {
         const s = useStore.getState();
         const id: number = msg.account_id;

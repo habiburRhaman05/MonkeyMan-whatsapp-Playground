@@ -11,9 +11,19 @@ A web dashboard to connect several WhatsApp numbers, switch between them, read c
 - Connect multiple numbers (QR scan), see live status, disconnect / reconnect / remove
 - Switch between numbers; each shows only its own chats
 - Chat list (sorted by latest) and a Contacts tab, with a filter box
+- **Profile photos** from WhatsApp on chats, contacts and the conversation header
+- **Contact names** correctly resolved (handles WhatsApp's newer @lid IDs)
 - Live messages with no refresh (WebSocket); history kept in SQLite
 - Send text (Enter = send, Shift+Enter = new line) with ✓ sent / ✓✓ delivered / blue ✓✓ read ticks, failed → Retry
+- **Send images, videos and documents** (paperclip button)
 - Record and send **voice notes** (microphone button); play received voice notes and images on demand
+- **Emoji picker** (smiley button next to the text box)
+- **Reply / quote messages** (right-click or tap the ⋮ menu on any bubble)
+- **React to messages** with quick emoji reactions
+- **Forward messages** to other chats
+- **Search in chat** (magnifying glass in the conversation header)
+- **Profile view panel** (click the name/avatar in the conversation header)
+- **Typing indicators** (dots appear when the other person is typing)
 - New chat by phone number
 - Unread badges per chat and per number, tab title `(3) WhatsApp Dashboard`
 - Notifications: in-app toasts (click to jump to the chat), sound with mute toggle, and **browser desktop notifications** when the tab is in the background
@@ -138,7 +148,7 @@ Use `tmux` or `pm2` to keep the backend and frontend running after you disconnec
 
 ## Known limits
 
-- Incoming images/video/documents/voice load on demand (click Open / Play). Sending images, video and files is not built yet — only text and voice notes.
+- Incoming images/video/documents/voice load on demand (click Open / Play).
 - No calling and no SMS.
 - Opening a chat marks it read **in the dashboard only**; no read receipt is sent to the contact, and the phone's own unread count is unchanged.
 - A failed voice note cannot be retried; record it again.

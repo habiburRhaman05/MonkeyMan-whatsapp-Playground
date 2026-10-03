@@ -2,8 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
-import { sendTextMessage, sendVoiceMessage } from "@/lib/actions";
+import { sendTextMessage, sendVoiceMessage, sendMediaMessage, emitTyping } from "@/lib/actions";
 import { newClientId } from "@/lib/util";
+import EmojiPicker from "./EmojiPicker";
 
 const MAX_RECORD_SECONDS = 180;
 const MIME_CANDIDATES = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"];
@@ -20,7 +21,10 @@ export default function Composer({ accountId, chatId, disabled }: { accountId: n
   const [text, setText] = useState("");
   const [recording, setRecording] = useState(false);
   const [seconds, setSeconds] = useState(0);
+  const [showEmoji, setShowEmoji] = useState(false);
+  const replyTo = useStore((s) => s.replyTo);
   const areaRef = useRef<HTMLTextAreaElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
@@ -33,17 +37,17 @@ export default function Composer({ accountId, chatId, disabled }: { accountId: n
     streamRef.current = null;
   };
 
-  // Reset when switching chats; release the microphone on unmount
   useEffect(() => {
     setText("");
     cancelRef.current = true;
     if (recorderRef.current && recorderRef.current.state !== "inactive") recorderRef.current.stop();
     setRecording(false);
+    setShowEmoji(false);
+    useStore.getState().setReplyTo(null);
     areaRef.current?.focus();
   }, [chatId]);
   useEffect(() => () => { cancelRef.current = true; recorderRef.current?.state !== "inactive" && recorderRef.current?.stop(); stopStream(); }, []);
 
-  // Recording timer + auto-stop
   useEffect(() => {
     if (!recording) return;
     setSeconds(0);
@@ -54,7 +58,6 @@ export default function Composer({ accountId, chatId, disabled }: { accountId: n
     if (recording && seconds >= MAX_RECORD_SECONDS) finishRecording(false);
   }, [seconds, recording]);
 
-  // Auto-grow textarea
   useEffect(() => {
     const el = areaRef.current;
     if (!el) return;
@@ -65,8 +68,26 @@ export default function Composer({ accountId, chatId, disabled }: { accountId: n
   function send() {
     const t = text.trim();
     if (!t || disabled) return;
+    const reply = useStore.getState().replyTo;
     setText("");
-    sendTextMessage(accountId, chatId, t, newClientId());
+    useStore.getState().setReplyTo(null);
+    sendTextMessage(accountId, chatId, t, newClientId(), reply?.wa_message_id);
+  }
+
+  function handleInput(value: string) {
+    setText(value);
+    emitTyping(accountId, chatId);
+  }
+
+  async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || disabled) return;
+    e.target.value = "";
+    if (file.size > 50 * 1024 * 1024) {
+      useStore.getState().pushToast({ kind: "error", title: "File too large", body: "Maximum size is ~37 MB" });
+      return;
+    }
+    sendMediaMessage(accountId, chatId, file, "", newClientId());
   }
 
   async function startRecording() {
@@ -130,52 +151,116 @@ export default function Composer({ accountId, chatId, disabled }: { accountId: n
   }
 
   return (
-    <div className="px-3 py-2 bg-background border-t border-border flex items-end gap-2">
-      {recording ? (
-        <>
-          <button onClick={() => finishRecording(true)} title="Cancel" className={`${iconBtn} text-danger hover:bg-black/5`}>
-            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6" />
+    <div className="bg-background border-t border-border shrink-0">
+      {/* Reply indicator */}
+      {replyTo && (
+        <div className="px-4 py-2 flex items-center gap-2 border-b border-border bg-gray-50">
+          <div className="flex-1 min-w-0 border-l-4 border-primary pl-2">
+            <div className="text-xs font-semibold text-primary truncate">
+              {replyTo.from_me ? "You" : replyTo.sender_name || ""}
+            </div>
+            <div className="text-xs text-muted truncate">
+              {replyTo.type !== "text" ? `[${replyTo.type}] ` : ""}{replyTo.text || ""}
+            </div>
+          </div>
+          <button onClick={() => useStore.getState().setReplyTo(null)} className="p-1 text-muted hover:text-foreground">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <path d="M18 6L6 18M6 6l12 12" />
             </svg>
           </button>
-          <div className="flex-1 flex items-center gap-2 px-3 py-2.5 rounded-3xl bg-surface text-sm">
-            <span className="w-2.5 h-2.5 rounded-full bg-danger animate-pulse" />
-            Recording… {mmss}
-          </div>
-          <button onClick={() => finishRecording(false)} title="Send voice message" className={`${iconBtn} bg-primary text-white hover:bg-primary-dark`}>
-            <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M2 21l21-9L2 3v7l15 2-15 2z" /></svg>
-          </button>
-        </>
-      ) : (
-        <>
-          <textarea
-            ref={areaRef}
-            value={text}
-            rows={1}
-            placeholder="Type a message"
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-                e.preventDefault();
-                send();
-              }
-            }}
-            className="flex-1 resize-none px-4 py-2.5 rounded-3xl bg-surface focus:outline-none text-[15px] max-h-36"
-          />
-          {text.trim() ? (
-            <button onClick={send} title="Send" className={`${iconBtn} bg-primary text-white hover:bg-primary-dark`}>
-              <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M2 21l21-9L2 3v7l15 2-15 2z" /></svg>
-            </button>
-          ) : (
-            <button onClick={startRecording} title="Record voice message" className={`${iconBtn} bg-primary text-white hover:bg-primary-dark`}>
+        </div>
+      )}
+
+      <div className="px-3 py-2 flex items-end gap-2">
+        {recording ? (
+          <>
+            <button onClick={() => finishRecording(true)} title="Cancel" className={`${iconBtn} text-danger hover:bg-black/5`}>
               <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="9" y="2" width="6" height="12" rx="3" />
-                <path d="M5 11a7 7 0 0014 0M12 18v4" />
+                <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6" />
               </svg>
             </button>
-          )}
-        </>
-      )}
+            <div className="flex-1 flex items-center gap-2 px-3 py-2.5 rounded-3xl bg-surface text-sm">
+              <span className="w-2.5 h-2.5 rounded-full bg-danger animate-pulse" />
+              Recording… {mmss}
+            </div>
+            <button onClick={() => finishRecording(false)} title="Send voice message" className={`${iconBtn} bg-primary text-white hover:bg-primary-dark`}>
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M2 21l21-9L2 3v7l15 2-15 2z" /></svg>
+            </button>
+          </>
+        ) : (
+          <>
+            {/* Emoji button */}
+            <div className="relative">
+              <button
+                onClick={() => setShowEmoji(!showEmoji)}
+                title="Emoji"
+                className={`${iconBtn} ${showEmoji ? "text-primary" : "text-muted"} hover:bg-black/5`}
+              >
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10" />
+                  <path d="M8 14s1.5 2 4 2 4-2 4-2" />
+                  <line x1="9" y1="9" x2="9.01" y2="9" />
+                  <line x1="15" y1="9" x2="15.01" y2="9" />
+                </svg>
+              </button>
+              {showEmoji && (
+                <EmojiPicker
+                  onSelect={(emoji) => {
+                    setText((t) => t + emoji);
+                    areaRef.current?.focus();
+                  }}
+                  onClose={() => setShowEmoji(false)}
+                />
+              )}
+            </div>
+
+            {/* Attachment button */}
+            <button
+              onClick={() => fileRef.current?.click()}
+              title="Attach file"
+              className={`${iconBtn} text-muted hover:bg-black/5`}
+            >
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
+              </svg>
+            </button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip,.rar"
+              onChange={handleFile}
+              className="hidden"
+            />
+
+            <textarea
+              ref={areaRef}
+              value={text}
+              rows={1}
+              placeholder="Type a message"
+              onChange={(e) => handleInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                  e.preventDefault();
+                  send();
+                }
+              }}
+              className="flex-1 resize-none px-4 py-2.5 rounded-3xl bg-surface focus:outline-none text-[15px] max-h-36"
+            />
+            {text.trim() ? (
+              <button onClick={send} title="Send" className={`${iconBtn} bg-primary text-white hover:bg-primary-dark`}>
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M2 21l21-9L2 3v7l15 2-15 2z" /></svg>
+              </button>
+            ) : (
+              <button onClick={startRecording} title="Record voice message" className={`${iconBtn} bg-primary text-white hover:bg-primary-dark`}>
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="9" y="2" width="6" height="12" rx="3" />
+                  <path d="M5 11a7 7 0 0014 0M12 18v4" />
+                </svg>
+              </button>
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 }

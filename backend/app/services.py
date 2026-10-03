@@ -42,6 +42,12 @@ def store_message(db: Session, account_id: int, p: ParsedMessage, bump_unread: b
         text=p.text,
         status=p.status,
         timestamp=p.timestamp,
+        quoted_message_id=p.quoted_id,
+        quoted_sender=p.quoted_sender,
+        quoted_text=p.quoted_text,
+        quoted_type=p.quoted_type,
+        media_mimetype=p.media_mimetype,
+        media_filename=p.media_filename,
     )
     db.add(msg)
     touch_chat(chat, p.timestamp, p.type, p.text)

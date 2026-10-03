@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useCallback } from "react";
 import { useStore } from "@/lib/store";
 import { openChat, openChatWith, runSync } from "@/lib/actions";
 import { avatarColor, chatTitle, contactTitle, formatListTime, phoneFromJid } from "@/lib/util";
@@ -17,6 +17,24 @@ export function Avatar({ name, size = 44 }: { name: string; size?: number }) {
       {initial}
     </div>
   );
+}
+
+export function ProfileAvatar({ name, url, size = 44 }: { name: string; url?: string | null; size?: number }) {
+  const [failed, setFailed] = useState(false);
+  const onError = useCallback(() => setFailed(true), []);
+
+  if (url && !failed) {
+    return (
+      <img
+        src={url}
+        alt={name}
+        className="rounded-full object-cover shrink-0"
+        style={{ width: size, height: size }}
+        onError={onError}
+      />
+    );
+  }
+  return <Avatar name={name} size={size} />;
 }
 
 export default function ChatList() {
@@ -115,7 +133,7 @@ export default function ChatList() {
                   c.id === activeChatId ? "bg-background" : ""
                 }`}
               >
-                <Avatar name={chatTitle(c)} />
+                <ProfileAvatar name={chatTitle(c)} url={c.profile_pic_url} />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-baseline justify-between gap-2">
                     <span className={`truncate ${c.unread_count ? "font-semibold" : "font-medium"}`}>{chatTitle(c)}</span>
@@ -149,7 +167,7 @@ export default function ChatList() {
               }}
               className="w-full flex items-center gap-3 px-3 py-2.5 text-left border-b border-border/60 hover:bg-background"
             >
-              <Avatar name={contactTitle(c)} size={40} />
+              <ProfileAvatar name={contactTitle(c)} url={c.profile_pic_url} size={40} />
               <div className="min-w-0">
                 <div className="truncate font-medium">{contactTitle(c)}</div>
                 <div className="truncate text-xs text-muted">

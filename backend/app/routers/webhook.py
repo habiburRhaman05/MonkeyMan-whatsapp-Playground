@@ -77,6 +77,8 @@ async def evolution_webhook(request: Request, secret: str = Query(...)):
             await _handle_messages_upsert(instance_name, body)
         elif event == "MESSAGES_UPDATE":
             await _handle_messages_update(instance_name, body)
+        elif event == "PRESENCE_UPDATE":
+            await _handle_presence_update(instance_name, body)
     except Exception:
         logger.exception("Webhook %s failed", event)
     return {"ok": True}
@@ -200,5 +202,36 @@ async def _handle_messages_update(instance_name: str, body: dict) -> None:
                     "data": {"message_id": msg.id, "chat_id": msg.chat_id, "status": new},
                 },
             )
+    finally:
+        db.close()
+
+
+async def _handle_presence_update(instance_name: str, body: dict) -> None:
+    data = body.get("data") or {}
+    jid = data.get("id") or data.get("remoteJid") or ""
+    presences = data.get("presences") or {}
+
+    db = SessionLocal()
+    try:
+        acc = db.query(Account).filter_by(instance_name=instance_name).first()
+        if not acc:
+            return
+        from app.models import Chat
+        chat = db.query(Chat).filter_by(account_id=acc.id, jid=jid).first()
+        if not chat:
+            return
+        composing = any(
+            p.get("status") in ("composing", "recording")
+            for p in (presences.values() if isinstance(presences, dict) else [])
+        )
+        participant = None
+        for pid, p in (presences.items() if isinstance(presences, dict) else []):
+            if p.get("status") in ("composing", "recording"):
+                participant = p.get("name") or pid.split("@")[0]
+                break
+        await manager.broadcast(
+            "typing",
+            {"account_id": acc.id, "data": {"chat_id": chat.id, "composing": composing, "participant": participant}},
+        )
     finally:
         db.close()

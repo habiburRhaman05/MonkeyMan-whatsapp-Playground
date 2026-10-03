@@ -44,6 +44,12 @@ class ParsedMessage:
     timestamp: datetime
     status: str
     chat_name_hint: str | None
+    quoted_id: str | None = None
+    quoted_sender: str | None = None
+    quoted_text: str | None = None
+    quoted_type: str | None = None
+    media_mimetype: str | None = None
+    media_filename: str | None = None
 
 
 def preview_for(msg_type: str, text: str | None) -> str:
@@ -126,6 +132,68 @@ def skip_jid(jid: str | None) -> bool:
     return (not jid) or jid == "status@broadcast" or jid.endswith("@broadcast") or jid.endswith("@newsletter")
 
 
+def phone_from_jid(jid: str) -> str | None:
+    """Extract digits before @ and strip any :device suffix. Returns None for non-phone JIDs."""
+    if not jid or jid.endswith("@g.us"):
+        return None
+    raw = jid.split("@")[0].split(":")[0]
+    return raw if raw.isdigit() and len(raw) >= 6 else None
+
+
+def _extract_quote(message: Any) -> tuple[str | None, str | None, str | None, str | None]:
+    """Extract quoted message info from contextInfo."""
+    m = message if isinstance(message, dict) else {}
+    for _ in range(3):
+        for w in _WRAPPERS:
+            inner = m.get(w)
+            if isinstance(inner, dict) and isinstance(inner.get("message"), dict):
+                m = inner["message"]
+                break
+        else:
+            break
+    ctx = None
+    for val in m.values():
+        if isinstance(val, dict):
+            ci = val.get("contextInfo")
+            if isinstance(ci, dict) and ci.get("quotedMessage"):
+                ctx = ci
+                break
+    if not ctx:
+        for val in m.values():
+            if isinstance(val, dict) and val.get("quotedMessage"):
+                ctx = val
+                break
+    if not ctx:
+        return None, None, None, None
+    qid = ctx.get("stanzaId")
+    qsender = ctx.get("participant") or ctx.get("remoteJid")
+    qmsg = ctx.get("quotedMessage")
+    if isinstance(qmsg, dict):
+        c = _classify(qmsg)
+        if c:
+            qt, qtxt = c
+            return qid, qsender, (qtxt or "")[:500], qt
+    return qid, qsender, None, None
+
+
+def _extract_media_meta(message: Any) -> tuple[str | None, str | None]:
+    """Extract mimetype and filename from media messages."""
+    m = message if isinstance(message, dict) else {}
+    for _ in range(3):
+        for w in _WRAPPERS:
+            inner = m.get(w)
+            if isinstance(inner, dict) and isinstance(inner.get("message"), dict):
+                m = inner["message"]
+                break
+        else:
+            break
+    for key in ("imageMessage", "videoMessage", "audioMessage", "documentMessage", "stickerMessage"):
+        sub = m.get(key)
+        if isinstance(sub, dict):
+            return sub.get("mimetype"), sub.get("fileName")
+    return None, None
+
+
 def parse_message(data: dict[str, Any]) -> ParsedMessage | None:
     if not isinstance(data, dict):
         return None
@@ -143,6 +211,8 @@ def parse_message(data: dict[str, Any]) -> ParsedMessage | None:
     from_me = bool(key.get("fromMe"))
     push = data.get("pushName") if isinstance(data.get("pushName"), str) else None
     is_group = jid.endswith("@g.us")
+    qid, qsender, qtext, qtype = _extract_quote(data.get("message"))
+    mimetype, filename = _extract_media_meta(data.get("message"))
     return ParsedMessage(
         jid=jid,
         wa_id=str(wa_id),
@@ -153,4 +223,10 @@ def parse_message(data: dict[str, Any]) -> ParsedMessage | None:
         timestamp=parse_ts(data.get("messageTimestamp")),
         status=map_status(data.get("status"), from_me),
         chat_name_hint=push if (not from_me and not is_group) else None,
+        quoted_id=qid,
+        quoted_sender=qsender,
+        quoted_text=qtext,
+        quoted_type=qtype,
+        media_mimetype=mimetype,
+        media_filename=filename,
     )

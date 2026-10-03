@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import evolution
 from app.config import settings
-from app.db import Base, SessionLocal, engine
+from app.db import Base, SessionLocal, engine, run_migrations
 from app.models import Account
 from app.routers import accounts, chats, webhook
 from app.sync import sync_account
@@ -18,8 +18,9 @@ from app.ws import manager
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(name)s  %(message)s")
 logger = logging.getLogger(__name__)
 
-# Create tables on startup
+# Create tables on startup, then add any new columns
 Base.metadata.create_all(bind=engine)
+run_migrations()
 
 
 async def _reapply_webhooks_and_sync() -> None:

@@ -187,6 +187,7 @@ class SendText(BaseModel):
     to: str | None = None
     text: str
     client_id: str | None = None
+    quoted_message_id: str | None = None
 
 
 class SendVoice(BaseModel):
@@ -194,6 +195,28 @@ class SendVoice(BaseModel):
     to: str | None = None
     audio_base64: str
     client_id: str | None = None
+
+
+class SendMedia(BaseModel):
+    chat_id: int | None = None
+    to: str | None = None
+    media_base64: str
+    media_type: str  # image | video | document
+    mimetype: str
+    filename: str | None = None
+    caption: str | None = None
+    client_id: str | None = None
+    quoted_message_id: str | None = None
+
+
+class SendReaction(BaseModel):
+    message_id: str
+    emoji: str
+
+
+class ForwardMessage(BaseModel):
+    to_chat_id: int | None = None
+    to: str | None = None
 
 
 def _create_pending(db: Session, acc: Account, chat: Chat, msg_type: str, text: str | None, client_id: str | None):
@@ -229,7 +252,7 @@ async def _announce_new(db: Session, acc: Account, chat: Chat, msg: Message) -> 
     await manager.broadcast("chat.updated", {"account_id": acc.id, "data": {"chat": chat_out(chat), "unread_total": total}})
 
 
-async def _deliver(account_id: int, message_id: int, kind: str, payload: str) -> None:
+async def _deliver(account_id: int, message_id: int, kind: str, payload: str, quoted_wa_id: str | None = None) -> None:
     """Background sender: throttled to ~1 msg/s per account. Never logs message content."""
     db = SessionLocal()
     try:
@@ -246,8 +269,9 @@ async def _deliver(account_id: int, message_id: int, kind: str, payload: str) ->
             if gap < MIN_SEND_GAP:
                 await asyncio.sleep(MIN_SEND_GAP - gap)
             try:
+                quoted = {"key": {"remoteJid": chat.jid, "id": quoted_wa_id}} if quoted_wa_id else None
                 if kind == "text":
-                    resp = await evolution.send_text(acc.instance_name, chat.jid, payload)
+                    resp = await evolution.send_text(acc.instance_name, chat.jid, payload, quoted_msg=quoted)
                 else:
                     resp = await evolution.send_audio(acc.instance_name, chat.jid, payload)
             except evolution.EvolutionError as exc:
@@ -305,7 +329,7 @@ async def send_text(account_id: int, body: SendText, db: Session = Depends(get_d
     chat = _resolve_chat(db, acc, body.chat_id, body.to)
     msg = _create_pending(db, acc, chat, "text", text, body.client_id)
     await _announce_new(db, acc, chat, msg)
-    _spawn(_deliver(acc.id, msg.id, "text", text))
+    _spawn(_deliver(acc.id, msg.id, "text", text, quoted_wa_id=body.quoted_message_id))
     return {"message": message_out(msg), "chat": chat_out(chat)}
 
 
@@ -346,3 +370,170 @@ async def retry_message(account_id: int, message_id: int, db: Session = Depends(
     )
     _spawn(_deliver(acc.id, msg.id, "text", msg.text))
     return {"message": message_out(msg)}
+
+
+# ── send media (image/video/document) ─────────────────────
+
+async def _deliver_media(account_id: int, message_id: int, payload: dict) -> None:
+    db = SessionLocal()
+    try:
+        acc = db.get(Account, account_id)
+        msg = db.get(Message, message_id)
+        if not acc or not msg:
+            return
+        chat = db.get(Chat, msg.chat_id)
+        lock = _locks.setdefault(account_id, asyncio.Lock())
+        ok = True
+        async with lock:
+            gap = time.monotonic() - _last_send.get(account_id, 0.0)
+            if gap < MIN_SEND_GAP:
+                await asyncio.sleep(MIN_SEND_GAP - gap)
+            try:
+                quoted = None
+                if payload.get("quoted_message_id"):
+                    quoted = {"key": {"remoteJid": chat.jid, "id": payload["quoted_message_id"]}}
+                resp = await evolution.send_media(
+                    acc.instance_name, chat.jid,
+                    media_type=payload["media_type"],
+                    media_b64=payload["media"],
+                    mimetype=payload["mimetype"],
+                    filename=payload.get("filename"),
+                    caption=payload.get("caption"),
+                    quoted_msg=quoted,
+                )
+            except (evolution.EvolutionError, httpx.HTTPError):
+                ok = False
+            _last_send[account_id] = time.monotonic()
+
+        if not ok:
+            msg.status = "failed"
+            db.commit()
+            await manager.broadcast(
+                "message.status",
+                {"account_id": account_id, "data": {"message_id": msg.id, "chat_id": msg.chat_id, "status": "failed"}},
+            )
+            return
+
+        wa_id = (((resp or {}).get("key")) or {}).get("id")
+        if wa_id:
+            msg.wa_message_id = wa_id
+        if msg.status == "pending":
+            msg.status = "sent"
+        db.commit()
+        await manager.broadcast(
+            "message.status",
+            {"account_id": account_id, "data": {"message_id": msg.id, "chat_id": msg.chat_id, "status": msg.status}},
+        )
+    except Exception:
+        logger.exception("Deliver media crashed for message %s", message_id)
+    finally:
+        db.close()
+
+
+@router.post("/send-media")
+async def send_media_endpoint(account_id: int, body: SendMedia, db: Session = Depends(get_db)):
+    acc = _account(db, account_id)
+    if acc.status != "connected":
+        raise HTTPException(409, "Account is not connected")
+    if body.media_type not in ("image", "video", "document"):
+        raise HTTPException(400, "media_type must be image, video or document")
+    media = body.media_base64
+    if media.startswith("data:"):
+        media = media.split(",", 1)[-1]
+    if len(media) < 100:
+        raise HTTPException(400, "File is empty")
+    if len(media) > 50_000_000:
+        raise HTTPException(413, "File is too large (max ~37 MB)")
+    chat = _resolve_chat(db, acc, body.chat_id, body.to)
+    msg = _create_pending(db, acc, chat, body.media_type, body.caption, body.client_id)
+    if body.filename:
+        msg.media_filename = body.filename
+        msg.media_mimetype = body.mimetype
+        db.commit()
+    await _announce_new(db, acc, chat, msg)
+    _spawn(_deliver_media(acc.id, msg.id, {
+        "media_type": body.media_type,
+        "media": media,
+        "mimetype": body.mimetype,
+        "filename": body.filename,
+        "caption": body.caption,
+        "quoted_message_id": body.quoted_message_id,
+    }))
+    return {"message": message_out(msg), "chat": chat_out(chat)}
+
+
+# ── reactions ─────────────────────────────────────────────
+
+@router.post("/messages/{message_id}/react")
+async def react_to_message(account_id: int, message_id: int, body: SendReaction, db: Session = Depends(get_db)):
+    acc = _account(db, account_id)
+    msg = db.get(Message, message_id)
+    if not msg or msg.account_id != acc.id:
+        raise HTTPException(404, "Message not found")
+    if acc.status != "connected":
+        raise HTTPException(409, "Account is not connected")
+    chat = db.get(Chat, msg.chat_id)
+    try:
+        await evolution.send_reaction(acc.instance_name, chat.jid, msg.wa_message_id, body.emoji)
+    except evolution.EvolutionError as exc:
+        raise HTTPException(502, f"Reaction failed: {exc.detail[:200]}")
+    except httpx.HTTPError:
+        raise HTTPException(502, "Cannot reach Evolution API")
+    return {"ok": True}
+
+
+# ── forward ───────────────────────────────────────────────
+
+@router.post("/messages/{message_id}/forward")
+async def forward_message(account_id: int, message_id: int, body: ForwardMessage, db: Session = Depends(get_db)):
+    acc = _account(db, account_id)
+    msg = db.get(Message, message_id)
+    if not msg or msg.account_id != acc.id:
+        raise HTTPException(404, "Message not found")
+    if acc.status != "connected":
+        raise HTTPException(409, "Account is not connected")
+    target_chat = _resolve_chat(db, acc, body.to_chat_id, body.to)
+    if msg.type == "text" and msg.text:
+        fwd = _create_pending(db, acc, target_chat, "text", msg.text, None)
+        await _announce_new(db, acc, target_chat, fwd)
+        _spawn(_deliver(acc.id, fwd.id, "text", msg.text))
+        return {"message": message_out(fwd), "chat": chat_out(target_chat)}
+    raise HTTPException(400, "Only text messages can be forwarded for now")
+
+
+# ── search ────────────────────────────────────────────────
+
+@router.get("/chats/{chat_id}/search")
+def search_messages(
+    account_id: int,
+    chat_id: int,
+    q: str = Query(..., min_length=1),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    acc = _account(db, account_id)
+    chat = _chat(db, acc, chat_id)
+    rows = (
+        db.query(Message)
+        .filter(Message.chat_id == chat.id, Message.text.ilike(f"%{q}%"))
+        .order_by(Message.timestamp.desc())
+        .limit(limit)
+        .all()
+    )
+    rows.reverse()
+    return {"messages": [message_out(m) for m in rows]}
+
+
+# ── typing indicator ──────────────────────────────────────
+
+@router.post("/chats/{chat_id}/typing")
+async def send_typing(account_id: int, chat_id: int, db: Session = Depends(get_db)):
+    acc = _account(db, account_id)
+    chat = _chat(db, acc, chat_id)
+    if acc.status != "connected":
+        return {"ok": False}
+    try:
+        await evolution.send_presence(acc.instance_name, chat.jid, composing=True)
+    except Exception:
+        pass
+    return {"ok": True}

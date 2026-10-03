@@ -5,7 +5,7 @@ import logging
 from app import evolution
 from app.db import SessionLocal
 from app.models import Account, Chat, Contact
-from app.normalize import STATUS_RANK, map_status, parse_message, parse_ts, skip_jid
+from app.normalize import STATUS_RANK, map_status, parse_message, parse_ts, phone_from_jid, skip_jid
 from app.serializers import unread_total
 from app.services import get_or_create_chat, store_message, touch_chat
 from app.ws import manager
@@ -46,10 +46,13 @@ async def sync_account(account_id: int, chat_limit: int = 30, msg_limit: int = 3
             last_from_me = bool(((last or {}).get("key") or {}).get("fromMe"))
             is_group = jid.endswith("@g.us")
             push = raw.get("pushName") if isinstance(raw.get("pushName"), str) else None
-            # For 1:1 chats pushName can be our own name when the last message is ours and no contact exists.
-            chat_name = push if (is_group or raw.get("id") or not last_from_me) else None
+            chat_name_field = raw.get("name") if isinstance(raw.get("name"), str) else None
+            chat_name = chat_name_field or (push if (is_group or raw.get("id") or not last_from_me) else None)
+            pic = raw.get("profilePicUrl") if isinstance(raw.get("profilePicUrl"), str) else None
             is_new = db.query(Chat).filter_by(account_id=account_id, jid=jid).first() is None
             chat = get_or_create_chat(db, account_id, jid, chat_name)
+            if pic and not chat.profile_pic_url:
+                chat.profile_pic_url = pic
             if is_new and isinstance(raw.get("unreadCount"), int):
                 chat.unread_count = max(raw["unreadCount"], 0)
             if last:
@@ -93,19 +96,38 @@ async def sync_account(account_id: int, chat_limit: int = 30, msg_limit: int = 3
             if skip_jid(jid):
                 continue
             push = raw.get("pushName") if isinstance(raw.get("pushName"), str) else None
+            pic = raw.get("profilePicUrl") if isinstance(raw.get("profilePicUrl"), str) else None
             existing = known.get(jid)
             if existing:
                 if push and existing.name != push:
                     existing.name = push
+                if pic:
+                    existing.profile_pic_url = pic
             else:
-                db.add(Contact(account_id=account_id, jid=jid, name=push, is_group=jid.endswith("@g.us")))
+                db.add(Contact(account_id=account_id, jid=jid, name=push, profile_pic_url=pic, is_group=jid.endswith("@g.us")))
         db.commit()
 
-        # 4. Fill chat names from contacts
-        names = {c.jid: c.name for c in db.query(Contact).filter_by(account_id=account_id).all() if c.name}
-        for chat in db.query(Chat).filter(Chat.account_id == account_id, Chat.name.is_(None)).all():
-            if chat.jid in names:
-                chat.name = names[chat.jid]
+        # 4. Fill chat names and profile pics from contacts
+        # Build maps by JID and by phone number (handles @lid mismatch)
+        contact_by_jid: dict[str, Contact] = {}
+        contact_by_phone: dict[str, Contact] = {}
+        for c in db.query(Contact).filter_by(account_id=account_id).all():
+            contact_by_jid[c.jid] = c
+            phone = phone_from_jid(c.jid)
+            if phone and not c.jid.endswith("@g.us"):
+                contact_by_phone[phone] = c
+
+        for chat in db.query(Chat).filter(Chat.account_id == account_id).all():
+            contact = contact_by_jid.get(chat.jid)
+            if not contact:
+                phone = phone_from_jid(chat.jid)
+                if phone:
+                    contact = contact_by_phone.get(phone)
+            if contact:
+                if not chat.name and contact.name:
+                    chat.name = contact.name
+                if not chat.profile_pic_url and contact.profile_pic_url:
+                    chat.profile_pic_url = contact.profile_pic_url
         db.commit()
 
         await manager.broadcast(

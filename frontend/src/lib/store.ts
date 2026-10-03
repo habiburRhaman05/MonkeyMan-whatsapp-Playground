@@ -12,6 +12,15 @@ export interface Toast {
   chatId?: number;
 }
 
+export interface ReplyTo {
+  id: number;
+  wa_message_id: string;
+  sender_name: string | null;
+  from_me: boolean;
+  text: string | null;
+  type: string;
+}
+
 interface State {
   accounts: Account[];
   accountsLoaded: boolean;
@@ -25,6 +34,8 @@ interface State {
   toasts: Toast[];
   muted: boolean;
   wsUp: boolean;
+  typing: Record<number, string | null>; // chat_id -> participant name or null
+  replyTo: ReplyTo | null;
 
   setAccounts: (a: Account[]) => void;
   patchAccount: (id: number, patch: Partial<Account>) => void;
@@ -42,6 +53,9 @@ interface State {
   dismissToast: (id: number) => void;
   setMuted: (m: boolean) => void;
   setWsUp: (up: boolean) => void;
+  setTyping: (chatId: number, participant: string | null) => void;
+  clearTyping: (chatId: number) => void;
+  setReplyTo: (r: ReplyTo | null) => void;
 }
 
 const STATUS_RANK: Record<MsgStatus, number> = { pending: 0, failed: 1, sent: 2, delivered: 3, read: 4 };
@@ -72,6 +86,8 @@ export const useStore = create<State>((set) => ({
   toasts: [],
   muted: false,
   wsUp: false,
+  typing: {},
+  replyTo: null,
 
   setAccounts: (accounts) => set({ accounts, accountsLoaded: true }),
   patchAccount: (id, patch) =>
@@ -128,6 +144,13 @@ export const useStore = create<State>((set) => ({
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
   setMuted: (muted) => set({ muted }),
   setWsUp: (wsUp) => set({ wsUp }),
+  setTyping: (chatId, participant) => set((s) => ({ typing: { ...s.typing, [chatId]: participant } })),
+  clearTyping: (chatId) => set((s) => {
+    const next = { ...s.typing };
+    delete next[chatId];
+    return { typing: next };
+  }),
+  setReplyTo: (replyTo) => set({ replyTo }),
 }));
 
 export const totalUnread = (accounts: Account[]) => accounts.reduce((n, a) => n + (a.unread_total || 0), 0);

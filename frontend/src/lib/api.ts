@@ -56,10 +56,18 @@ export interface Chat {
   account_id: number;
   jid: string;
   name: string | null;
+  profile_pic_url: string | null;
   is_group: boolean;
   last_message_at: string | null;
   last_message_preview: string | null;
   unread_count: number;
+}
+
+export interface QuotedInfo {
+  message_id: string;
+  sender: string | null;
+  text: string | null;
+  type: string | null;
 }
 
 export interface Message {
@@ -74,6 +82,9 @@ export interface Message {
   text: string | null;
   status: MsgStatus;
   timestamp: string;
+  quoted?: QuotedInfo;
+  media_mimetype?: string;
+  media_filename?: string;
 }
 
 export interface Contact {
@@ -81,6 +92,7 @@ export interface Contact {
   account_id: number;
   jid: string;
   name: string | null;
+  profile_pic_url: string | null;
   is_group: boolean;
 }
 
@@ -115,7 +127,8 @@ export const sendText = (
   target: { chat_id?: number; to?: string },
   text: string,
   clientId: string,
-) => post<{ message: Message; chat: Chat }>(`/accounts/${accountId}/send`, { ...target, text, client_id: clientId });
+  quotedMessageId?: string,
+) => post<{ message: Message; chat: Chat }>(`/accounts/${accountId}/send`, { ...target, text, client_id: clientId, quoted_message_id: quotedMessageId });
 
 export const sendVoice = (
   accountId: number,
@@ -134,3 +147,35 @@ export const retryMessage = (accountId: number, messageId: number) =>
 
 export const getMedia = (accountId: number, messageId: number) =>
   request<{ data_url: string }>(`/accounts/${accountId}/messages/${messageId}/media`);
+
+export const sendMedia = (
+  accountId: number,
+  target: { chat_id?: number; to?: string },
+  mediaBase64: string,
+  mediaType: "image" | "video" | "document",
+  mimetype: string,
+  clientId: string,
+  filename?: string,
+  caption?: string,
+) =>
+  post<{ message: Message; chat: Chat }>(`/accounts/${accountId}/send-media`, {
+    ...target,
+    media_base64: mediaBase64,
+    media_type: mediaType,
+    mimetype,
+    filename,
+    caption,
+    client_id: clientId,
+  });
+
+export const reactToMessage = (accountId: number, messageId: number, waMessageId: string, emoji: string) =>
+  post(`/accounts/${accountId}/messages/${messageId}/react`, { message_id: waMessageId, emoji });
+
+export const forwardMessage = (accountId: number, messageId: number, target: { to_chat_id?: number; to?: string }) =>
+  post<{ message: Message; chat: Chat }>(`/accounts/${accountId}/messages/${messageId}/forward`, target);
+
+export const searchMessages = (accountId: number, chatId: number, q: string) =>
+  request<{ messages: Message[] }>(`/accounts/${accountId}/chats/${chatId}/search?q=${encodeURIComponent(q)}`);
+
+export const sendTyping = (accountId: number, chatId: number) =>
+  post(`/accounts/${accountId}/chats/${chatId}/typing`);

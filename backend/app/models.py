@@ -34,6 +34,7 @@ class Chat(Base):
     account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), nullable=False)
     jid: Mapped[str] = mapped_column(String(80), nullable=False)
     name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    profile_pic_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     is_group: Mapped[bool] = mapped_column(Boolean, default=False)
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_message_preview: Mapped[str | None] = mapped_column(String(200), nullable=True)
@@ -51,6 +52,7 @@ class Contact(Base):
     account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), nullable=False)
     jid: Mapped[str] = mapped_column(String(80), nullable=False)
     name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    profile_pic_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     is_group: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
@@ -71,5 +73,15 @@ class Message(Base):
     # pending | sent | delivered | read | failed
     status: Mapped[str] = mapped_column(String(20), default="sent")
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    # reply/quote context
+    quoted_message_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    quoted_sender: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    quoted_text: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    quoted_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # reaction (emoji)
+    reaction: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # media metadata for sending
+    media_mimetype: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    media_filename: Mapped[str | None] = mapped_column(String(300), nullable=True)
 
     chat: Mapped["Chat"] = relationship(back_populates="messages")
