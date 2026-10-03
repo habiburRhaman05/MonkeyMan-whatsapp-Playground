@@ -35,6 +35,7 @@ class Chat(Base):
     jid: Mapped[str] = mapped_column(String(80), nullable=False)
     name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     profile_pic_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    custom_name: Mapped[str | None] = mapped_column(String(200), nullable=True)  # set by you in the dashboard
     is_group: Mapped[bool] = mapped_column(Boolean, default=False)
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_message_preview: Mapped[str | None] = mapped_column(String(200), nullable=True)
@@ -43,9 +44,38 @@ class Chat(Base):
     pinned: Mapped[bool | None] = mapped_column(Boolean, default=False, nullable=True)
     archived: Mapped[bool | None] = mapped_column(Boolean, default=False, nullable=True)
     muted: Mapped[bool | None] = mapped_column(Boolean, default=False, nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)  # private note, dashboard only
 
     account: Mapped["Account"] = relationship(back_populates="chats")
     messages: Mapped[list["Message"]] = relationship(back_populates="chat", cascade="all, delete-orphan")
+    label_links: Mapped[list["ChatLabel"]] = relationship(cascade="all, delete-orphan")
+
+
+class Label(Base):
+    """A colored tag you can put on chats. Shared by all numbers; lives only in this dashboard."""
+
+    __tablename__ = "labels"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
+    color: Mapped[str] = mapped_column(String(9), default="#00a884")
+
+
+class ChatLabel(Base):
+    __tablename__ = "chat_labels"
+
+    chat_id: Mapped[int] = mapped_column(ForeignKey("chats.id"), primary_key=True)
+    label_id: Mapped[int] = mapped_column(ForeignKey("labels.id"), primary_key=True)
+
+
+class QuickReply(Base):
+    """Saved text snippet: type /shortcut in the message box to insert it."""
+
+    __tablename__ = "quick_replies"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    shortcut: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
 
 
 class Contact(Base):

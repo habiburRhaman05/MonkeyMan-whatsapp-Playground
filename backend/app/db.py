@@ -44,6 +44,8 @@ def run_migrations() -> None:
     _COLUMNS = {
         "chats": [
             ("profile_pic_url", "VARCHAR(500)"),
+            ("custom_name", "VARCHAR(200)"),
+            ("note", "TEXT"),
             ("pinned", "BOOLEAN DEFAULT FALSE"),
             ("archived", "BOOLEAN DEFAULT FALSE"),
             ("muted", "BOOLEAN DEFAULT FALSE"),

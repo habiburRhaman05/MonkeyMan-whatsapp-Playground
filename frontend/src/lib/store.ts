@@ -1,7 +1,7 @@
 "use client";
 
 import { create } from "zustand";
-import type { Account, Chat, Contact, Message, MsgStatus } from "./api";
+import type { Account, Chat, Contact, Label, Message, MsgStatus, QuickReply } from "./api";
 
 export interface Toast {
   id: number;
@@ -37,6 +37,8 @@ interface State {
   typing: Record<number, string | null>; // chat_id -> participant name or null
   replyTo: ReplyTo | null;
   editing: Message | null;
+  labels: Label[];
+  quickReplies: QuickReply[];
 
   setAccounts: (a: Account[]) => void;
   patchAccount: (id: number, patch: Partial<Account>) => void;
@@ -59,6 +61,8 @@ interface State {
   clearTyping: (chatId: number) => void;
   setReplyTo: (r: ReplyTo | null) => void;
   setEditing: (m: Message | null) => void;
+  setLabels: (l: Label[]) => void;
+  setQuickReplies: (r: QuickReply[]) => void;
 }
 
 const STATUS_RANK: Record<MsgStatus, number> = { pending: 0, failed: 1, sent: 2, delivered: 3, read: 4 };
@@ -93,6 +97,8 @@ export const useStore = create<State>((set) => ({
   typing: {},
   replyTo: null,
   editing: null,
+  labels: [],
+  quickReplies: [],
 
   setAccounts: (accounts) => set({ accounts, accountsLoaded: true }),
   patchAccount: (id, patch) =>
@@ -164,6 +170,8 @@ export const useStore = create<State>((set) => ({
   }),
   setReplyTo: (replyTo) => set({ replyTo, editing: null }),
   setEditing: (editing) => set({ editing, replyTo: null }),
+  setLabels: (labels) => set({ labels }),
+  setQuickReplies: (quickReplies) => set({ quickReplies }),
 }));
 
 export const totalUnread = (accounts: Account[]) => accounts.reduce((n, a) => n + (a.unread_total || 0), 0);

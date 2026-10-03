@@ -4,7 +4,7 @@ import { useState } from "react";
 import { getMedia, type Message } from "@/lib/api";
 import { retry, reactMessage, forwardMsg, deleteMsg, toggleStar } from "@/lib/actions";
 import { useStore } from "@/lib/store";
-import { avatarColor, formatTime } from "@/lib/util";
+import { avatarColor, chatTitle, formatTime } from "@/lib/util";
 import { REACTION_EMOJIS } from "./EmojiPicker";
 
 const LABELS: Record<string, string> = {
@@ -24,7 +24,7 @@ function Ticks({ status }: { status: Message["status"] }) {
   return <span className="text-danger font-bold" title="Failed">!</span>;
 }
 
-function Media({ msg }: { msg: Message }) {
+export function Media({ msg }: { msg: Message }) {
   const [url, setUrl] = useState<string | null>(null);
   const [state, setState] = useState<"idle" | "loading" | "error">("idle");
   const label = LABELS[msg.type] ?? "Media";
@@ -151,7 +151,7 @@ function ContextMenu({ msg, accountId, onClose }: { msg: Message; accountId: num
             }}
             className="w-full text-left px-2 py-1.5 text-sm hover:bg-gray-50 rounded truncate"
           >
-            {c.name || c.jid.split("@")[0]}
+            {chatTitle(c)}
           </button>
         ))}
       </div>
@@ -267,7 +267,9 @@ export default function Bubble({ msg, isGroup, showName, accountId }: { msg: Mes
         <QuotedMessage msg={msg} />
 
         {msg.type !== "text" && <Media msg={msg} />}
-        {msg.text && <div className="whitespace-pre-wrap break-words text-[15px]">{msg.text}</div>}
+        {msg.text && !(msg.type === "document" && msg.text === msg.media_filename) && (
+          <div className="whitespace-pre-wrap break-words text-[15px]">{msg.text}</div>
+        )}
 
         <div className="flex items-center justify-end gap-1.5 mt-0.5 text-[11px] text-muted">
           {msg.status === "failed" && mine && (

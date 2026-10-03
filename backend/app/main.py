@@ -11,7 +11,7 @@ from app import evolution
 from app.config import settings
 from app.db import Base, SessionLocal, engine, run_migrations
 from app.models import Account
-from app.routers import accounts, chats, webhook
+from app.routers import accounts, chats, organize, webhook
 from app.sync import sync_account
 from app.ws import manager
 
@@ -71,6 +71,7 @@ app.add_middleware(
 # Routers
 app.include_router(accounts.router)
 app.include_router(chats.router)
+app.include_router(organize.router)
 app.include_router(webhook.router)
 
 

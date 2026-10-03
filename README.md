@@ -24,6 +24,10 @@ A web dashboard to connect several WhatsApp numbers, switch between them, read c
 - **Delete** your messages for everyone, or hide any message for yourself; messages deleted by the other person show as "This message was deleted"
 - **Edit** your own text messages (WhatsApp allows 15 minutes); edits made on the phone update here
 - **Read receipts:** opening a chat sends real blue ticks and clears the unread count on your phone (turn off with `SEND_READ_RECEIPTS=false`)
+- **Search** every chat's messages from the filter box (type 2+ letters); click a result to jump to it
+- **Group info:** description, member list with admins, leave group. **Media, docs, links** tab per chat.
+- **Labels** (colored tags, shown as dots on the chat list), a private **note** per chat, and **Rename** for any chat. These are dashboard-only.
+- **Quick replies:** type `/` in the message box (e.g. `/thanks`) to insert a saved snippet; the ⚡ button manages them
 - **Star** messages and see them in the Starred tab; **pin, archive and mute** chats (muted chats keep their badge but never make sound or alerts). Star, pin, archive and mute live in this dashboard only; they are not synced to your phone.
 - **Search in chat** (magnifying glass in the conversation header)
 - **Profile view panel** (click the name/avatar in the conversation header)
@@ -154,6 +158,8 @@ Use `tmux` or `pm2` to keep the backend and frontend running after you disconnec
 
 - Incoming images/video/documents/voice load on demand (click Open / Play).
 - No calling and no SMS.
+- Adding or removing group members and changing group settings are not built (viewing and leaving are).
+- Contact names: WhatsApp does not reliably send your phone's address-book names to linked devices. Chats show the person's own WhatsApp profile name; use Rename to set your own. Open `http://localhost:8000/accounts/1/debug/names` to see why a chat has no name.
 - "Delete for me" hides a message in this dashboard only; it stays on your phone. Deleting for everyone works only on your own messages, within WhatsApp's time limit.
 - Opening a chat sends a read receipt for its unread messages (the sender sees blue ticks). Set `SEND_READ_RECEIPTS=false` in `.env` to only clear the dashboard's own badge.
 - A failed voice note cannot be retried; record it again.

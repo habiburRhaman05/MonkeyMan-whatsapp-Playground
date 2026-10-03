@@ -39,6 +39,7 @@ def chat_out(c: Chat) -> dict:
         "account_id": c.account_id,
         "jid": c.jid,
         "name": c.name,
+        "custom_name": c.custom_name,
         "profile_pic_url": c.profile_pic_url,
         "is_group": c.is_group,
         "last_message_at": iso(c.last_message_at),
@@ -47,6 +48,8 @@ def chat_out(c: Chat) -> dict:
         "pinned": bool(c.pinned),
         "archived": bool(c.archived),
         "muted": bool(c.muted),
+        "note": c.note,
+        "label_ids": [link.label_id for link in c.label_links],
     }
 
 

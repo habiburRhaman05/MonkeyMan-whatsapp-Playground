@@ -110,7 +110,7 @@ export default function Conversation() {
   }
 
   return (
-    <div className="flex-1 flex min-w-0 min-h-0">
+    <div className="flex-1 flex min-w-0 min-h-0 relative">
       <div className="flex-1 flex flex-col min-w-0 min-h-0 bg-[#efeae2]">
         {/* Header */}
         <div className="flex items-center gap-3 px-3 py-2 bg-sidebar-bg border-b border-border shrink-0">
@@ -120,7 +120,7 @@ export default function Conversation() {
             </svg>
           </button>
           <button onClick={() => setShowProfile(!showProfile)} className="flex items-center gap-3 min-w-0 flex-1">
-            <ProfileAvatar name={title} url={chat?.profile_pic_url} size={40} />
+            <ProfileAvatar name={title} url={chat?.profile_pic_url} size={40} chat={chat} />
             <div className="min-w-0 text-left">
               <div className="font-semibold truncate">{title}</div>
               <div className="text-xs text-muted truncate">

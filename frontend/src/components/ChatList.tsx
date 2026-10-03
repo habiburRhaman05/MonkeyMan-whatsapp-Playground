@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
-import { openChat, openChatWith, runSync, setChatFlags } from "@/lib/actions";
+import { searchAll, type Chat, type Message } from "@/lib/api";
+import { openChat, openChatWith, openMessage, refreshPhoto, renameChat, runSync, setChatFlags } from "@/lib/actions";
 import StarredList from "./StarredList";
 import { avatarColor, chatTitle, contactTitle, formatListTime, phoneFromJid } from "@/lib/util";
 import { Badge } from "./TopBar";
@@ -20,22 +21,31 @@ export function Avatar({ name, size = 44 }: { name: string; size?: number }) {
   );
 }
 
-export function ProfileAvatar({ name, url, size = 44 }: { name: string; url?: string | null; size?: number }) {
+function Photo({ name, url, size, onBroken }: { name: string; url: string; size: number; onBroken?: () => void }) {
   const [failed, setFailed] = useState(false);
-  const onError = useCallback(() => setFailed(true), []);
+  if (failed) return <Avatar name={name} size={size} />;
+  return (
+    <img
+      src={url}
+      alt={name}
+      className="rounded-full object-cover shrink-0"
+      style={{ width: size, height: size }}
+      onError={() => {
+        setFailed(true);
+        onBroken?.();
+      }}
+    />
+  );
+}
 
-  if (url && !failed) {
-    return (
-      <img
-        src={url}
-        alt={name}
-        className="rounded-full object-cover shrink-0"
-        style={{ width: size, height: size }}
-        onError={onError}
-      />
-    );
-  }
-  return <Avatar name={name} size={size} />;
+/** Profile photo with an initial-letter fallback. Pass `chat` so an expired photo link is refreshed automatically. */
+export function ProfileAvatar({ name, url, size = 44, chat }: { name: string; url?: string | null; size?: number; chat?: Chat }) {
+  // keyed by url so a refreshed link gets a fresh attempt
+  return url ? (
+    <Photo key={url} name={name} url={url} size={size} onBroken={chat ? () => refreshPhoto(chat) : undefined} />
+  ) : (
+    <Avatar name={name} size={size} />
+  );
 }
 
 export default function ChatList() {
@@ -51,15 +61,39 @@ export default function ChatList() {
   const [showArchived, setShowArchived] = useState(false);
   const [menuFor, setMenuFor] = useState<number | null>(null);
 
+  const labels = useStore((s) => s.labels);
+  const [found, setFound] = useState<{ q: string; items: { message: Message; chat: Chat }[] } | null>(null);
+
   const q = query.trim().toLowerCase();
   const archivedCount = (chats ?? []).filter((c) => c.archived).length;
   const filteredChats = useMemo(
     () =>
       (chats ?? []).filter(
-        (c) => !!c.archived === showArchived && (!q || chatTitle(c).toLowerCase().includes(q) || c.jid.includes(q)),
+        (c) =>
+          !!c.archived === showArchived &&
+          (!q ||
+            chatTitle(c).toLowerCase().includes(q) ||
+            c.jid.includes(q) ||
+            labels.some((l) => c.label_ids.includes(l.id) && l.name.toLowerCase().includes(q))),
       ),
-    [chats, q, showArchived],
+    [chats, q, showArchived, labels],
   );
+
+  // Search inside messages of every chat of this number while typing (after a short pause)
+  useEffect(() => {
+    if (!accountId || tab !== "chats" || q.length < 2) return;
+    let alive = true;
+    const t = setTimeout(() => {
+      searchAll(accountId, q)
+        .then((items) => alive && setFound({ q, items }))
+        .catch(() => alive && setFound({ q, items: [] }));
+    }, 350);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [accountId, tab, q]);
+  const messageHits = tab === "chats" && q.length >= 2 && found?.q === q ? found.items : [];
   const filteredContacts = useMemo(
     () => (contacts ?? []).filter((c) => !q || contactTitle(c).toLowerCase().includes(q) || c.jid.includes(q)),
     [contacts, q],
@@ -153,10 +187,17 @@ export default function ChatList() {
             filteredChats.map((c) => (
               <div key={c.id} className={`group relative border-b border-border/60 hover:bg-background ${c.id === activeChatId ? "bg-background" : ""}`}>
                 <button onClick={() => openChat(account.id, c.id)} className="w-full flex items-center gap-3 px-3 py-2.5 text-left">
-                  <ProfileAvatar name={chatTitle(c)} url={c.profile_pic_url} />
+                  <ProfileAvatar name={chatTitle(c)} url={c.profile_pic_url} chat={c} />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-baseline justify-between gap-2">
-                      <span className={`truncate ${c.unread_count ? "font-semibold" : "font-medium"}`}>{chatTitle(c)}</span>
+                      <span className="flex items-center gap-1.5 min-w-0">
+                        <span className={`truncate ${c.unread_count ? "font-semibold" : "font-medium"}`}>{chatTitle(c)}</span>
+                        {labels
+                          .filter((l) => c.label_ids.includes(l.id))
+                          .map((l) => (
+                            <span key={l.id} title={l.name} className="w-2 h-2 rounded-full shrink-0" style={{ background: l.color }} />
+                          ))}
+                      </span>
                       <span className={`text-xs shrink-0 ${c.unread_count ? "text-primary font-medium" : "text-muted"}`}>
                         {formatListTime(c.last_message_at)}
                       </span>
@@ -202,6 +243,15 @@ export default function ChatList() {
                           {item.label}
                         </button>
                       ))}
+                      <button
+                        onClick={() => {
+                          renameChat(c, c.custom_name || c.name || "");
+                          setMenuFor(null);
+                        }}
+                        className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50"
+                      >
+                        Rename
+                      </button>
                     </div>
                   </>
                 )}
@@ -236,7 +286,26 @@ export default function ChatList() {
             </button>
           ))
         )}
+        {messageHits.length > 0 && (
+          <div className="border-t border-border">
+            <div className="px-3 py-1.5 text-xs text-muted uppercase tracking-wider bg-background">Messages</div>
+            {messageHits.map(({ message, chat }) => (
+              <button
+                key={message.id}
+                onClick={() => openMessage(account.id, chat.id, message.id)}
+                className="w-full text-left px-3 py-2 border-b border-border/60 hover:bg-background"
+              >
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="truncate text-sm font-medium">{chatTitle(chat)}</span>
+                  <span className="text-xs text-muted shrink-0">{formatListTime(message.timestamp)}</span>
+                </div>
+                <div className="truncate text-sm text-muted">{message.text}</div>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
+
 
       {showNew && <NewChatDialog accountId={account.id} onClose={() => setShowNew(false)} />}
     </div>

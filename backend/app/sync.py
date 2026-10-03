@@ -4,7 +4,7 @@ import logging
 
 from app import evolution
 from app.db import SessionLocal
-from app.models import Account, Chat, Contact
+from app.models import Account, Chat, Contact, Message
 from app.normalize import (
     STATUS_RANK,
     map_status,
@@ -155,6 +155,16 @@ async def sync_account(account_id: int, chat_limit: int = 30, msg_limit: int = 3
                     chat.name = contact.name
                 if not chat.profile_pic_url and contact.profile_pic_url:
                     chat.profile_pic_url = contact.profile_pic_url
+            if not chat.name and not chat.is_group:
+                # Last resort: the profile name the person used in their latest message to us
+                latest = (
+                    db.query(Message.sender_name)
+                    .filter(Message.chat_id == chat.id, Message.from_me.is_(False), Message.sender_name.is_not(None))
+                    .order_by(Message.timestamp.desc())
+                    .first()
+                )
+                if latest and latest[0]:
+                    chat.name = latest[0]
         db.commit()
 
         await manager.broadcast(

@@ -8,6 +8,7 @@ import {
   loadChats,
   loadContacts,
   loadMessages,
+  loadOrganize,
   markChatRead,
   openChat,
   refreshAccounts,
@@ -31,6 +32,7 @@ export default function Realtime() {
       useStore.getState().setMuted(localStorage.getItem("wa-muted") === "1");
     } catch {}
     refreshAccounts();
+    loadOrganize();
   }, []);
 
   // Tab title: "(3) WhatsApp Dashboard"

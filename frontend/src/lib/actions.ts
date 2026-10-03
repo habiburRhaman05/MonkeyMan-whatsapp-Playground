@@ -79,6 +79,8 @@ export async function openChat(accountId: number, chatId: number) {
   }
   st().setActive(accountId, chatId);
   syncUrl();
+  const chat = st().chats[accountId]?.find((c) => c.id === chatId);
+  if (chat && !chat.profile_pic_url) refreshPhoto(chat);
   await loadMessages(accountId, chatId);
   markChatRead(accountId, chatId);
 }
@@ -169,6 +171,7 @@ export async function sendMediaMessage(
   file: File,
   caption: string,
   clientId: string,
+  quotedWaId?: string,
 ) {
   const mediaType: "image" | "video" | "document" = file.type.startsWith("image/")
     ? "image"
@@ -178,7 +181,7 @@ export async function sendMediaMessage(
   const temp = optimistic(accountId, chatId, mediaType, caption || `[${mediaType}]`, clientId);
   try {
     const b64 = await fileToBase64(file);
-    const r = await api.sendMedia(accountId, { chat_id: chatId }, b64, mediaType, file.type, clientId, file.name, caption || undefined);
+    const r = await api.sendMedia(accountId, { chat_id: chatId }, b64, mediaType, file.type, clientId, file.name, caption || undefined, quotedWaId);
     st().upsertMessage(r.message);
     st().upsertChat(r.chat);
   } catch (e) {
@@ -231,7 +234,10 @@ export async function toggleStar(msg: api.Message) {
 }
 
 /** Pin / archive / mute a chat. Applied instantly, rolled back if the server refuses. */
-export async function setChatFlags(chat: api.Chat, flags: Partial<Pick<api.Chat, "pinned" | "archived" | "muted">>) {
+export async function setChatFlags(
+  chat: api.Chat,
+  flags: Partial<Pick<api.Chat, "pinned" | "archived" | "muted" | "custom_name" | "note">>,
+) {
   st().upsertChat({ ...chat, ...flags });
   try {
     st().upsertChat(await api.patchChat(chat.account_id, chat.id, flags));
@@ -239,6 +245,24 @@ export async function setChatFlags(chat: api.Chat, flags: Partial<Pick<api.Chat,
     st().upsertChat(chat);
     st().pushToast({ kind: "error", title: "Could not update chat", body: errText(e) });
   }
+}
+
+/** Ask for a new name; empty text goes back to the name WhatsApp gives. */
+export function renameChat(chat: api.Chat, current: string) {
+  const next = window.prompt("Name for this chat (leave empty to use WhatsApp's name):", current);
+  if (next === null) return;
+  setChatFlags(chat, { custom_name: next.trim() });
+}
+
+const photoTried = new Set<number>();
+/** WhatsApp photo links expire; fetch a fresh one once per chat per page load. */
+export async function refreshPhoto(chat: api.Chat) {
+  if (photoTried.has(chat.id)) return;
+  photoTried.add(chat.id);
+  try {
+    const fresh = await api.refreshChatPhoto(chat.account_id, chat.id);
+    if (fresh.profile_pic_url !== chat.profile_pic_url) st().upsertChat(fresh);
+  } catch {}
 }
 
 export async function deleteMsg(msg: api.Message, scope: "me" | "everyone") {
@@ -277,4 +301,84 @@ export function emitTyping(accountId: number, chatId: number) {
   if (typingTimer) return;
   api.sendTyping(accountId, chatId).catch(() => {});
   typingTimer = setTimeout(() => { typingTimer = null; }, 5000);
+}
+
+/** Open a chat and scroll to one message, loading older pages until it is found. */
+export async function openMessage(accountId: number, chatId: number, messageId: number) {
+  await openChat(accountId, chatId);
+  for (let i = 0; i < 20; i++) {
+    if (st().messages[chatId]?.some((m) => m.id === messageId) || !st().hasMore[chatId]) break;
+    await loadOlder(accountId, chatId);
+  }
+  await new Promise((r) => setTimeout(r, 150));
+  const el = document.getElementById(`msg-${messageId}`);
+  if (!el) {
+    st().pushToast({ kind: "info", title: "Could not find that message in the chat" });
+    return;
+  }
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  el.classList.add("bg-yellow-100/70");
+  setTimeout(() => el.classList.remove("bg-yellow-100/70"), 1500);
+}
+
+export async function loadOrganize() {
+  try {
+    const [labels, replies] = await Promise.all([api.listLabels(), api.listQuickReplies()]);
+    st().setLabels(labels);
+    st().setQuickReplies(replies);
+  } catch {}
+}
+
+export async function addLabel(name: string): Promise<api.Label | null> {
+  try {
+    const lb = await api.createLabel(name);
+    st().setLabels([...st().labels, lb].sort((a, b) => a.name.localeCompare(b.name)));
+    return lb;
+  } catch (e) {
+    st().pushToast({ kind: "error", title: "Could not create label", body: errText(e) });
+    return null;
+  }
+}
+
+export async function removeLabel(id: number) {
+  try {
+    await api.deleteLabel(id);
+    st().setLabels(st().labels.filter((l) => l.id !== id));
+    for (const list of Object.values(st().chats)) {
+      for (const c of list) if (c.label_ids.includes(id)) st().upsertChat({ ...c, label_ids: c.label_ids.filter((x) => x !== id) });
+    }
+  } catch (e) {
+    st().pushToast({ kind: "error", title: "Could not delete label", body: errText(e) });
+  }
+}
+
+export async function toggleChatLabel(chat: api.Chat, labelId: number) {
+  const next = chat.label_ids.includes(labelId) ? chat.label_ids.filter((x) => x !== labelId) : [...chat.label_ids, labelId];
+  st().upsertChat({ ...chat, label_ids: next });
+  try {
+    st().upsertChat(await api.setChatLabels(chat.account_id, chat.id, next));
+  } catch (e) {
+    st().upsertChat(chat);
+    st().pushToast({ kind: "error", title: "Could not update labels", body: errText(e) });
+  }
+}
+
+export async function addQuickReply(shortcut: string, text: string): Promise<boolean> {
+  try {
+    const r = await api.createQuickReply(shortcut, text);
+    st().setQuickReplies([...st().quickReplies, r].sort((a, b) => a.shortcut.localeCompare(b.shortcut)));
+    return true;
+  } catch (e) {
+    st().pushToast({ kind: "error", title: "Could not save quick reply", body: errText(e) });
+    return false;
+  }
+}
+
+export async function removeQuickReply(id: number) {
+  try {
+    await api.deleteQuickReply(id);
+    st().setQuickReplies(st().quickReplies.filter((r) => r.id !== id));
+  } catch (e) {
+    st().pushToast({ kind: "error", title: "Could not delete quick reply", body: errText(e) });
+  }
 }

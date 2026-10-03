@@ -5,6 +5,7 @@ import { useStore } from "@/lib/store";
 import { sendTextMessage, sendVoiceMessage, sendMediaMessage, emitTyping, editMsg } from "@/lib/actions";
 import { newClientId } from "@/lib/util";
 import EmojiPicker from "./EmojiPicker";
+import QuickRepliesDialog from "./QuickRepliesDialog";
 
 const MAX_RECORD_SECONDS = 180;
 const MIME_CANDIDATES = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"];
@@ -24,6 +25,9 @@ export default function Composer({ accountId, chatId, disabled }: { accountId: n
   const [showEmoji, setShowEmoji] = useState(false);
   const replyTo = useStore((s) => s.replyTo);
   const editing = useStore((s) => s.editing);
+  const quickReplies = useStore((s) => s.quickReplies);
+  const [showReplies, setShowReplies] = useState(false);
+  const [qrIndex, setQrIndex] = useState(0);
   const areaRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -93,7 +97,19 @@ export default function Composer({ accountId, chatId, disabled }: { accountId: n
     sendTextMessage(accountId, chatId, t, newClientId(), reply?.wa_message_id);
   }
 
+  // "/thanks" at the start of the box (no spaces yet) suggests matching quick replies
+  const slash = !editing && text.startsWith("/") && !/\s/.test(text) ? text.slice(1).toLowerCase() : null;
+  const matches = slash === null ? [] : quickReplies.filter((r) => r.shortcut.startsWith(slash)).slice(0, 6);
+  const activeMatch = Math.min(qrIndex, Math.max(matches.length - 1, 0));
+
+  function pickReply(body: string) {
+    setText(body);
+    setQrIndex(0);
+    areaRef.current?.focus();
+  }
+
   function handleInput(value: string) {
+    setQrIndex(0);
     setText(value);
     emitTyping(accountId, chatId);
   }
@@ -106,7 +122,9 @@ export default function Composer({ accountId, chatId, disabled }: { accountId: n
       useStore.getState().pushToast({ kind: "error", title: "File too large", body: "Maximum size is ~37 MB" });
       return;
     }
-    sendMediaMessage(accountId, chatId, file, "", newClientId());
+    const reply = useStore.getState().replyTo;
+    useStore.getState().setReplyTo(null);
+    sendMediaMessage(accountId, chatId, file, "", newClientId(), reply?.wa_message_id);
   }
 
   async function startRecording() {
@@ -171,6 +189,7 @@ export default function Composer({ accountId, chatId, disabled }: { accountId: n
 
   return (
     <div className="bg-background border-t border-border shrink-0">
+      {showReplies && <QuickRepliesDialog onPick={pickReply} onClose={() => setShowReplies(false)} />}
       {editing && (
         <div className="px-4 py-2 flex items-center gap-2 border-b border-border bg-gray-50">
           <div className="flex-1 min-w-0 border-l-4 border-primary pl-2">
@@ -265,6 +284,30 @@ export default function Composer({ accountId, chatId, disabled }: { accountId: n
               className="hidden"
             />
 
+            <button
+              onClick={() => setShowReplies(true)}
+              title="Quick replies"
+              className={`${iconBtn} text-muted hover:bg-black/5`}
+            >
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M13 2L3 14h8l-1 8 10-12h-8l1-8z" />
+              </svg>
+            </button>
+            <div className="relative flex-1 min-w-0">
+              {matches.length > 0 && (
+                <div className="absolute bottom-full left-0 right-0 mb-2 bg-white rounded-xl shadow-lg border border-border overflow-hidden z-50">
+                  {matches.map((r, i) => (
+                    <button
+                      key={r.id}
+                      onMouseDown={(e) => { e.preventDefault(); pickReply(r.text); }}
+                      className={`w-full text-left px-3 py-2 ${i === activeMatch ? "bg-background" : "hover:bg-background"}`}
+                    >
+                      <span className="text-sm font-medium text-primary">/{r.shortcut}</span>
+                      <span className="ml-2 text-sm text-muted truncate">{r.text.slice(0, 80)}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
             <textarea
               ref={areaRef}
               value={text}
@@ -272,6 +315,18 @@ export default function Composer({ accountId, chatId, disabled }: { accountId: n
               placeholder="Type a message"
               onChange={(e) => handleInput(e.target.value)}
               onKeyDown={(e) => {
+                if (matches.length > 0) {
+                  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                    e.preventDefault();
+                    setQrIndex((activeMatch + (e.key === "ArrowDown" ? 1 : matches.length - 1)) % matches.length);
+                    return;
+                  }
+                  if ((e.key === "Enter" || e.key === "Tab") && !e.shiftKey && !e.nativeEvent.isComposing) {
+                    e.preventDefault();
+                    pickReply(matches[activeMatch].text);
+                    return;
+                  }
+                }
                 if (e.key === "Escape" && useStore.getState().editing) {
                   cancelEdit();
                   return;
@@ -281,8 +336,9 @@ export default function Composer({ accountId, chatId, disabled }: { accountId: n
                   send();
                 }
               }}
-              className="flex-1 resize-none px-4 py-2.5 rounded-3xl bg-surface focus:outline-none text-[15px] max-h-36"
+              className="w-full resize-none px-4 py-2.5 rounded-3xl bg-surface focus:outline-none text-[15px] max-h-36"
             />
+            </div>
             {text.trim() ? (
               <button onClick={send} title="Send" className={`${iconBtn} bg-primary text-white hover:bg-primary-dark`}>
                 <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M2 21l21-9L2 3v7l15 2-15 2z" /></svg>

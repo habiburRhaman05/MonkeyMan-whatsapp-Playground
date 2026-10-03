@@ -11,7 +11,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app import evolution
 from app.config import settings
@@ -81,6 +81,7 @@ def list_chats(account_id: int, db: Session = Depends(get_db)):
     acc = _account(db, account_id)
     chats = (
         db.query(Chat)
+        .options(selectinload(Chat.label_links))
         .filter(Chat.account_id == acc.id)
         .order_by(Chat.last_message_at.is_(None), Chat.last_message_at.desc())
         .all()
@@ -636,6 +637,8 @@ class ChatFlags(BaseModel):
     pinned: bool | None = None
     archived: bool | None = None
     muted: bool | None = None
+    note: str | None = Field(None, max_length=4000)  # "" clears the note
+    custom_name: str | None = Field(None, max_length=200)  # "" clears your name and goes back to WhatsApp's
 
 
 @router.patch("/chats/{chat_id}")
@@ -646,11 +649,201 @@ async def update_chat_flags(account_id: int, chat_id: int, body: ChatFlags, db: 
         value = getattr(body, field)
         if value is not None:
             setattr(chat, field, value)
+    if body.custom_name is not None:
+        chat.custom_name = body.custom_name.strip() or None
+    if body.note is not None:
+        chat.note = body.note.strip() or None
     db.commit()
     await manager.broadcast(
         "chat.updated", {"account_id": acc.id, "data": {"chat": chat_out(chat), "unread_total": unread_total(db, acc.id)}}
     )
     return chat_out(chat)
+
+
+# ── group info ────────────────────────────────────────────
+
+def _digits(jid: str) -> str:
+    return re.sub(r"\D", "", jid.split("@")[0].split(":")[0])
+
+
+@router.get("/chats/{chat_id}/group")
+async def group_info(account_id: int, chat_id: int, db: Session = Depends(get_db)):
+    acc = _account(db, account_id)
+    chat = _chat(db, acc, chat_id)
+    if not chat.is_group:
+        raise HTTPException(400, "Not a group chat")
+    if acc.status != "connected":
+        raise HTTPException(409, "Account is not connected")
+    try:
+        info = await evolution.find_group(acc.instance_name, chat.jid)
+    except evolution.EvolutionError as exc:
+        raise HTTPException(502, f"Group info not available (HTTP {exc.status_code})")
+    except httpx.HTTPError:
+        raise HTTPException(502, "Cannot reach Evolution API")
+
+    names: dict[str, str] = {}
+    for c in db.query(Contact).filter(Contact.account_id == acc.id, Contact.name.is_not(None)).all():
+        names[_digits(c.jid)] = c.name
+    mine = _digits(acc.phone_number or "")
+    people, me_admin = [], False
+    for p in info.get("participants") or []:
+        if not isinstance(p, dict):
+            continue
+        raw_id = str(p.get("id") or p.get("jid") or "")
+        jid = str(p.get("phoneNumber") or raw_id)
+        digits = _digits(jid)
+        # hidden "@lid" ids are not phone numbers; only show a number when we really have one
+        has_phone = bool(digits) and (bool(p.get("phoneNumber")) or not raw_id.endswith("@lid"))
+        admin = p.get("admin") if p.get("admin") in ("admin", "superadmin") else None
+        is_me = has_phone and bool(mine) and digits == mine
+        me_admin = me_admin or (is_me and admin is not None)
+        people.append(
+            {
+                "jid": jid,
+                "name": "You" if is_me else (names.get(digits) if has_phone else None),
+                "phone": digits if has_phone else None,
+                "admin": admin,
+            }
+        )
+    people.sort(key=lambda x: (x["admin"] is None, (x["name"] or x["phone"] or "").lower()))
+    return {
+        "subject": info.get("subject"),
+        "description": info.get("desc") or info.get("description"),
+        "created": info.get("creation"),
+        "owner": info.get("owner"),
+        "participants": people,
+        "me_admin": me_admin,
+    }
+
+
+@router.post("/chats/{chat_id}/leave")
+async def leave_group_chat(account_id: int, chat_id: int, db: Session = Depends(get_db)):
+    acc = _account(db, account_id)
+    chat = _chat(db, acc, chat_id)
+    if not chat.is_group:
+        raise HTTPException(400, "Not a group chat")
+    if acc.status != "connected":
+        raise HTTPException(409, "Account is not connected")
+    try:
+        await evolution.leave_group(acc.instance_name, chat.jid)
+    except evolution.EvolutionError as exc:
+        raise HTTPException(502, f"Could not leave the group (HTTP {exc.status_code}): {exc.detail[:200]}")
+    except httpx.HTTPError:
+        raise HTTPException(502, "Cannot reach Evolution API")
+    return {"ok": True}
+
+
+# ── media gallery ─────────────────────────────────────────
+
+_URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
+
+
+@router.get("/chats/{chat_id}/gallery")
+def gallery(
+    account_id: int,
+    chat_id: int,
+    kind: str = Query("media", pattern="^(media|docs|links)$"),
+    limit: int = Query(60, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    """Media = images and videos, docs = files, links = messages that contain a web address. Newest first."""
+    acc = _account(db, account_id)
+    chat = _chat(db, acc, chat_id)
+    q = db.query(Message).filter(Message.chat_id == chat.id, Message.hidden.is_not(True), Message.deleted.is_not(True))
+    if kind == "media":
+        rows = q.filter(Message.type.in_(("image", "video"))).order_by(Message.timestamp.desc()).limit(limit).all()
+        return {"messages": [message_out(m) for m in rows]}
+    if kind == "docs":
+        rows = q.filter(Message.type == "document").order_by(Message.timestamp.desc()).limit(limit).all()
+        return {"messages": [message_out(m) for m in rows]}
+    rows = q.filter(Message.text.ilike("%http%")).order_by(Message.timestamp.desc()).limit(limit * 3).all()
+    out = []
+    for m in rows:
+        urls = _URL_RE.findall(m.text or "")
+        if urls:
+            out.append({**message_out(m), "links": urls[:5]})
+        if len(out) >= limit:
+            break
+    return {"messages": out}
+
+
+# ── search across all chats of one number ─────────────────
+
+@router.get("/search")
+def search_all(account_id: int, q: str = Query(..., min_length=2, max_length=100), db: Session = Depends(get_db)):
+    acc = _account(db, account_id)
+    rows = (
+        db.query(Message, Chat)
+        .join(Chat, Chat.id == Message.chat_id)
+        .options(selectinload(Chat.label_links))
+        .filter(
+            Message.account_id == acc.id,
+            Message.hidden.is_not(True),
+            Message.deleted.is_not(True),
+            Message.text.ilike(f"%{q}%"),
+        )
+        .order_by(Message.timestamp.desc())
+        .limit(40)
+        .all()
+    )
+    return [{"message": message_out(m), "chat": chat_out(c)} for m, c in rows]
+
+
+# ── profile photo ─────────────────────────────────────────
+
+@router.post("/chats/{chat_id}/photo")
+async def refresh_photo(account_id: int, chat_id: int, db: Session = Depends(get_db)):
+    """WhatsApp photo links expire, so fetch a fresh one on demand (called when an image fails to load)."""
+    acc = _account(db, account_id)
+    chat = _chat(db, acc, chat_id)
+    if acc.status == "connected":
+        try:
+            url = await evolution.fetch_profile_picture(acc.instance_name, chat.jid)
+        except (evolution.EvolutionError, httpx.HTTPError):
+            url = None
+        if url and url != chat.profile_pic_url:
+            chat.profile_pic_url = url
+            db.commit()
+    return chat_out(chat)
+
+
+# ── diagnostics ───────────────────────────────────────────
+
+def _mask(jid: str) -> str:
+    user, _, host = jid.partition("@")
+    return (user[:3] + "…" + user[-2:] if len(user) > 6 else user) + "@" + host
+
+
+@router.get("/debug/names")
+def debug_names(account_id: int, db: Session = Depends(get_db)):
+    """Why do some chats have no name? Counts by id type plus a few masked examples. Open it in the browser."""
+    acc = _account(db, account_id)
+    chats = db.query(Chat).filter(Chat.account_id == acc.id).all()
+    contacts = db.query(Contact).filter(Contact.account_id == acc.id).all()
+
+    def kind(jid: str) -> str:
+        return "group" if jid.endswith("@g.us") else "lid" if jid.endswith("@lid") else "phone" if jid.endswith("@s.whatsapp.net") else "other"
+
+    summary: dict = {"chats": {}, "contacts": {}}
+    for label, rows in (("chats", chats), ("contacts", contacts)):
+        for r in rows:
+            k = summary[label].setdefault(kind(r.jid), {"total": 0, "named": 0, "with_photo": 0})
+            k["total"] += 1
+            k["named"] += 1 if (getattr(r, "custom_name", None) or r.name) else 0
+            k["with_photo"] += 1 if r.profile_pic_url else 0
+    unnamed = [c for c in chats if not c.is_group and not (c.custom_name or c.name)][:8]
+    summary["unnamed_chat_examples"] = [
+        {
+            "jid": _mask(c.jid),
+            "kind": kind(c.jid),
+            "messages": db.query(Message).filter(Message.chat_id == c.id).count(),
+            "incoming_with_profile_name": db.query(Message)
+            .filter(Message.chat_id == c.id, Message.from_me.is_(False), Message.sender_name.is_not(None))
+            .count(),
+        }
+        for c in unnamed
+    ]
+    return summary
 
 
 # ── delete ────────────────────────────────────────────────

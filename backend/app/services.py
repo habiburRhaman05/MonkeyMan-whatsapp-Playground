@@ -5,7 +5,7 @@ import json
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models import Account, Chat, Message
+from app.models import Account, Chat, Contact, Message
 from app.normalize import ParsedMessage, phone_from_jid, preview_for
 from app.serializers import load_reactions
 
@@ -113,9 +113,20 @@ def touch_chat(chat: Chat, p_time, msg_type: str, text: str | None) -> None:
         chat.last_message_preview = preview_for(msg_type, text)
 
 
+def _remember_contact(db: Session, account_id: int, jid: str, name: str) -> None:
+    """People who message us become contacts under their own WhatsApp profile name."""
+    contact = db.query(Contact).filter_by(account_id=account_id, jid=jid).first()
+    if contact is None:
+        db.add(Contact(account_id=account_id, jid=jid, name=name, is_group=False))
+    elif not contact.name:
+        contact.name = name
+
+
 def store_message(db: Session, account_id: int, p: ParsedMessage, bump_unread: bool) -> tuple[Chat, Message, bool]:
     """Idempotent on (account, wa_message_id). Returns (chat, message, created)."""
     chat = get_or_create_chat(db, account_id, p.jid, p.chat_name_hint)
+    if p.chat_name_hint and not chat.is_group:
+        _remember_contact(db, account_id, p.jid, p.chat_name_hint)
     existing = db.query(Message).filter_by(account_id=account_id, wa_message_id=p.wa_id).first()
     if existing:
         db.commit()

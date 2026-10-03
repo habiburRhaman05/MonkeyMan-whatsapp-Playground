@@ -2,14 +2,16 @@ import type { Chat, Contact } from "./api";
 
 export const phoneFromJid = (jid: string) => jid.split("@")[0].split(":")[0];
 
-export function chatTitle(c: Pick<Chat, "name" | "jid" | "is_group">): string {
-  if (c.name) return c.name;
-  if (c.is_group) return "Group";
-  return "+" + phoneFromJid(c.jid);
+// WhatsApp's hidden "@lid" ids are not phone numbers, so never show their digits as a number.
+const noName = (jid: string, isGroup: boolean) =>
+  isGroup ? "Group" : jid.endsWith("@lid") ? "WhatsApp user" : "+" + phoneFromJid(jid);
+
+export function chatTitle(c: Pick<Chat, "name" | "jid" | "is_group"> & { custom_name?: string | null }): string {
+  return c.custom_name || c.name || noName(c.jid, c.is_group);
 }
 
 export function contactTitle(c: Contact): string {
-  return c.name || (c.is_group ? "Group" : "+" + phoneFromJid(c.jid));
+  return c.name || noName(c.jid, c.is_group);
 }
 
 export function formatListTime(iso: string | null): string {

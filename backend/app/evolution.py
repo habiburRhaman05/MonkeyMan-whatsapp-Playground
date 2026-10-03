@@ -185,6 +185,24 @@ async def delete_message_for_everyone(instance_name: str, to: str, message_id: s
     return await _request("DELETE", f"/chat/deleteMessageForEveryone/{instance_name}", json=body)
 
 
+async def find_group(instance_name: str, group_jid: str) -> dict[str, Any]:
+    """GET /group/findGroupInfos/{instance}?groupJid= -> {id, subject, owner, desc, creation, participants:[...]}"""
+    data = await _request("GET", f"/group/findGroupInfos/{instance_name}", params={"groupJid": group_jid})
+    return data if isinstance(data, dict) else {}
+
+
+async def leave_group(instance_name: str, group_jid: str) -> dict[str, Any]:
+    """DELETE /group/leaveGroup/{instance}?groupJid="""
+    return await _request("DELETE", f"/group/leaveGroup/{instance_name}", params={"groupJid": group_jid})
+
+
+async def fetch_profile_picture(instance_name: str, number: str) -> str | None:
+    """POST /chat/fetchProfilePictureUrl/{instance} {number} -> {wuid, profilePictureUrl}"""
+    data = await _request("POST", f"/chat/fetchProfilePictureUrl/{instance_name}", json={"number": number})
+    url = data.get("profilePictureUrl") if isinstance(data, dict) else None
+    return url if isinstance(url, str) and url else None
+
+
 async def mark_messages_read(instance_name: str, items: list[dict]) -> dict[str, Any]:
     """POST /chat/markMessageAsRead/{instance} {readMessages:[{remoteJid, fromMe, id, participant?}]}"""
     return await _request("POST", f"/chat/markMessageAsRead/{instance_name}", json={"readMessages": items})

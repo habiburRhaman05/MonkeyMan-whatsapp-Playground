@@ -56,6 +56,7 @@ export interface Chat {
   account_id: number;
   jid: string;
   name: string | null;
+  custom_name: string | null;
   profile_pic_url: string | null;
   is_group: boolean;
   last_message_at: string | null;
@@ -64,6 +65,35 @@ export interface Chat {
   pinned: boolean;
   archived: boolean;
   muted: boolean;
+  note: string | null;
+  label_ids: number[];
+}
+
+export interface Label {
+  id: number;
+  name: string;
+  color: string;
+}
+
+export interface QuickReply {
+  id: number;
+  shortcut: string;
+  text: string;
+}
+
+export interface GroupParticipant {
+  jid: string;
+  name: string | null;
+  phone: string | null;
+  admin: "admin" | "superadmin" | null;
+}
+
+export interface GroupInfo {
+  subject: string | null;
+  description: string | null;
+  created: number | null;
+  participants: GroupParticipant[];
+  me_admin: boolean;
 }
 
 export interface QuotedInfo {
@@ -170,9 +200,11 @@ export const sendMedia = (
   clientId: string,
   filename?: string,
   caption?: string,
+  quotedMessageId?: string,
 ) =>
   post<{ message: Message; chat: Chat }>(`/accounts/${accountId}/send-media`, {
     ...target,
+    quoted_message_id: quotedMessageId,
     media_base64: mediaBase64,
     media_type: mediaType,
     mimetype,
@@ -197,9 +229,39 @@ export const listStarred = (accountId: number) =>
 export const patchChat = (
   accountId: number,
   chatId: number,
-  flags: Partial<Pick<Chat, "pinned" | "archived" | "muted">>,
+  flags: Partial<Pick<Chat, "pinned" | "archived" | "muted" | "custom_name" | "note">>,
 ) =>
   request<Chat>(`/accounts/${accountId}/chats/${chatId}`, { method: "PATCH", body: JSON.stringify(flags) });
+
+export const getGroupInfo = (accountId: number, chatId: number) =>
+  request<GroupInfo>(`/accounts/${accountId}/chats/${chatId}/group`);
+
+export const leaveGroup = (accountId: number, chatId: number) =>
+  post(`/accounts/${accountId}/chats/${chatId}/leave`);
+
+export type GalleryKind = "media" | "docs" | "links";
+export type GalleryMessage = Message & { links?: string[] };
+export const getGallery = (accountId: number, chatId: number, kind: GalleryKind) =>
+  request<{ messages: GalleryMessage[] }>(`/accounts/${accountId}/chats/${chatId}/gallery?kind=${kind}`);
+
+export const searchAll = (accountId: number, q: string) =>
+  request<{ message: Message; chat: Chat }[]>(`/accounts/${accountId}/search?q=${encodeURIComponent(q)}`);
+
+export const listLabels = () => request<Label[]>("/labels");
+export const createLabel = (name: string) => post<Label>("/labels", { name });
+export const deleteLabel = (id: number) => request(`/labels/${id}`, { method: "DELETE" });
+export const setChatLabels = (accountId: number, chatId: number, labelIds: number[]) =>
+  request<Chat>(`/accounts/${accountId}/chats/${chatId}/labels`, {
+    method: "PUT",
+    body: JSON.stringify({ label_ids: labelIds }),
+  });
+
+export const listQuickReplies = () => request<QuickReply[]>("/quick-replies");
+export const createQuickReply = (shortcut: string, text: string) => post<QuickReply>("/quick-replies", { shortcut, text });
+export const deleteQuickReply = (id: number) => request(`/quick-replies/${id}`, { method: "DELETE" });
+
+export const refreshChatPhoto = (accountId: number, chatId: number) =>
+  post<Chat>(`/accounts/${accountId}/chats/${chatId}/photo`);
 
 export const deleteMessage =(accountId: number, messageId: number, scope: "me" | "everyone") =>
   post<{ ok?: boolean; message?: Message }>(`/accounts/${accountId}/messages/${messageId}/delete`, { scope });
