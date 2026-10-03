@@ -1,6 +1,8 @@
 /** API client — all backend requests go through here. */
 
-export const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+// Default "/api": same-origin, forwarded to the backend by the Next.js server (see next.config.ts).
+// Set NEXT_PUBLIC_API_URL to a full URL only to call the backend directly.
+export const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "/api").replace(/\/$/, "");
 
 export class ApiError extends Error {
   constructor(

@@ -10,7 +10,12 @@ interface Options {
   onClose?: () => void;
 }
 
-const WS_URL = API_BASE.replace(/^http/, "ws") + "/ws";
+/** ws(s) URL of the backend socket; relative bases ("/api") resolve against the page address. */
+function wsUrl(): string {
+  if (/^https?:/.test(API_BASE)) return API_BASE.replace(/^http/, "ws") + "/ws";
+  const scheme = window.location.protocol === "https:" ? "wss" : "ws";
+  return `${scheme}://${window.location.host}${API_BASE}/ws`;
+}
 
 /**
  * One WebSocket with auto-reconnect (1s -> 30s backoff).
@@ -30,7 +35,7 @@ export function useSocket(handlers: Record<string, Handler>, options: Options = 
     let everOpened = false;
 
     const connect = () => {
-      ws = new WebSocket(WS_URL);
+      ws = new WebSocket(wsUrl());
       ws.onopen = () => {
         delay = 1000;
         optionsRef.current.onOpen?.(everOpened);

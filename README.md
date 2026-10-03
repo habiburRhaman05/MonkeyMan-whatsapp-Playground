@@ -76,7 +76,11 @@ npm install
 npm run dev          # development, http://localhost:3001
 ```
 
-For a server: `npm run build && npm start -- --port 3001`. `NEXT_PUBLIC_API_URL` (in `frontend/.env.local`) is baked in at build time.
+For a server: `npm run build && npm start -- --port 3001`.
+
+The browser only talks to port 3001: the frontend forwards `/api/*` (including the live WebSocket) to the backend on `localhost:8000` (see `frontend/next.config.ts`). You do not need a `frontend/.env` file. If the backend runs elsewhere, set `BACKEND_URL` before starting the frontend.
+
+**GitHub Codespaces:** if `docker compose up` shows `P1001 Can't reach database server`, container networking is blocked there; use `docker compose -f docker-compose.host.yml up -d` and set `WEBHOOK_BASE_URL=http://localhost:8000` in `.env`.
 
 ### 5. Use it
 
